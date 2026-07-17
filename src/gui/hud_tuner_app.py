@@ -2522,7 +2522,12 @@ class HudTunerApp:
         }
 
 
-if __name__ == '__main__':
+def main():
+    """Entry point for the HUD Tuner GUI application."""
     root = tk.Tk()
-    app  = HudTunerApp(root)
+    app = HudTunerApp(root)
     root.mainloop()
+
+
+if __name__ == '__main__':
+    main()

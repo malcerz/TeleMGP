@@ -169,19 +169,17 @@ class TestRegisterFitFields:
         assert "fit_alt_text" not in registered
 
     def test_duplicate_keys_skipped(self, stub: FitRegistrationStub) -> None:
-        """If an indicator already exists in layout, it should not be re-added."""
+        """If an indicator already exists in layout, it should be added to fit_ext_fields
+        but the existing config should not be overwritten."""
         stub.fit_data = {"heart_rate": _samples(72)}
         # Manually pre-add the key and clear any stale entry
         stub.layout["indicators"]["fit_heart_rate_text"] = {"existing": True}
-        # fit_ext_fields is cleared at start of _register_fit_fields, so
-        # the pre-existing layout entry means the field is skipped entirely
         stub._register_fit_fields()
 
         # The existing config should not have been overwritten
         assert stub.layout["indicators"]["fit_heart_rate_text"] == {"existing": True}
-        # The clearance removed any stale keys and nothing new was added
-        # because the key already existed in layout
-        assert stub.fit_ext_fields == []
+        # Key is still added to fit_ext_fields so the Extension list shows it
+        assert stub.fit_ext_fields == ["fit_heart_rate_text"]
 
     def test_realistic_fit_fields(self, stub: FitRegistrationStub) -> None:
         """Test with fields matching a real FIT file (Morning_Ride.fit)."""
@@ -283,22 +281,26 @@ class TestRebuildExtList:
     """Tests for the ``_rebuild_ext_list`` method."""
 
     def test_empty_fields(self, stub: FitRegistrationStub) -> None:
-        """With no fields, listbox should be cleared and nothing inserted."""
+        """With no FIT fields, only GPX extension fields are inserted."""
         stub.fit_ext_fields = []
         stub._rebuild_ext_list()
         stub.ext_list.delete.assert_called_once_with(0, tk.END)
-        stub.ext_list.insert.assert_not_called()
+        # GPX_EXT_FIELDS (power_text, atemp_text, hr_text, cad_text, battery_text)
+        # are now always inserted first
+        from src.gui.widgets import GPX_EXT_FIELDS
+        assert stub.ext_list.insert.call_count == len(GPX_EXT_FIELDS)
 
     def test_populated_fields(self, stub: FitRegistrationStub) -> None:
-        """Each field in fit_ext_fields should be inserted into the listbox."""
+        """Each field in fit_ext_fields + GPX_EXT_FIELDS should be inserted."""
         stub.layout["indicators"]["fit_hr_text"] = {"label": "Heart Rate"}
         stub.layout["indicators"]["fit_cad_text"] = {"label": "Cadence"}
         stub.fit_ext_fields = ["fit_hr_text", "fit_cad_text"]
         stub._rebuild_ext_list()
         # delete should have been called
         stub.ext_list.delete.assert_called_once()
-        # insert should be called twice
-        assert stub.ext_list.insert.call_count == 2
+        # GPX_EXT_FIELDS are inserted first, then FIT fields
+        from src.gui.widgets import GPX_EXT_FIELDS
+        assert stub.ext_list.insert.call_count == len(GPX_EXT_FIELDS) + 2
 
     def test_missing_indicator_config(self, stub: FitRegistrationStub) -> None:
         """If an indicator config is missing, the key itself is used as label."""
