@@ -800,6 +800,11 @@ class HudTunerApp:
         self._rebuild_ext_list()
         self.ext_list.pack(fill=tk.X)
         self.ext_list.bind('<<ListboxSelect>>', self.on_ext_select)
+        # Przycisk resetu wskaźników (poniżej list)
+        reset_frame = tk.Frame(builtin_box)
+        reset_frame.pack(fill=tk.X, pady=(4, 0))
+        tk.Button(reset_frame, text='Resetuj wskaźniki (bez daty/czasu)',
+                  command=self.reset_indicators).pack(fill=tk.X)
 
         # ── Custom Texts sekcja ──
         custom_texts_box = tk.LabelFrame(left, text='Niestandardowe Teksty')
@@ -1177,6 +1182,30 @@ class HudTunerApp:
             self._rebuild_custom_texts_list()
             self.build_property_editor_builtin()
             self.refresh()
+
+    def reset_indicators(self):
+        """Resetuje wszystkie wskaźniki oprócz time_block – wyłącza je i czyści custom texty."""
+        from tkinter import messagebox
+        if not messagebox.askyesno('Reset', 'Wyłączyć wszystkie wskaźniki oprócz daty/czasu?'):
+            return
+        indicators = self.layout.get('indicators', {})
+        for key in list(indicators.keys()):
+            if key == 'time_block':
+                continue
+            # Wyłącz wskaźnik i zachowaj resztę configu
+            indicators[key]['enabled'] = False
+        # Wyczyść custom texty
+        self.layout['custom_texts'] = []
+        # Odśwież UI
+        self._rebuild_custom_texts_list()
+        self._rebuild_ext_list()
+        # Przebuduj listę głównych wskaźników
+        self.indicator_list.delete(0, tk.END)
+        for key in self.layout['indicators'].keys():
+            if key not in GPX_EXT_FIELDS and not key.startswith("fit_"):
+                self.indicator_list.insert(tk.END, key)
+        self.build_property_editor_builtin()
+        self.refresh()
 
     def on_builtin_change(self):
         # Sprawdź, która lista ma zaznaczenie - priorytet: custom_texts > indicator > gpx_ext
