@@ -155,7 +155,7 @@ def get_value_schema():
         ("form", "choice", ["text", "gauge", "bar", "chart"], None, None),
         ("font_size", "float", 0.005, 0.1, 0.001),
         ("size", "float", 0.01, 0.5, 0.001),
-        ("thickness", "float", 0.001, 0.05, 0.001),
+        ("thickness", "int", 1, 10, 1),
         ("min_val", "float", 0.0, 1000.0, 1.0),
         ("max_val", "float", 1.0, 10000.0, 1.0),
         ("ticks", "int", 0, 20, 1),

@@ -427,7 +427,14 @@ def render_value_indicator(
     val_min = float(cfg.get("min_val", 0))
     val_max = float(cfg.get("max_val", 100))
     ticks = int(cfg.get("ticks", 0))
-    thickness = max(1, s(cfg.get("thickness", 0.005), min_dim))
+    # thickness: new format (1-10) → convert to old relative for s() scaling;
+    # old format (< 1) → use as-is for backward compat
+    _thickness_raw = float(cfg.get("thickness", 1))
+    if _thickness_raw >= 1:
+        _thickness_rel = _thickness_raw / 200.0
+    else:
+        _thickness_rel = _thickness_raw
+    thickness = max(1, s(_thickness_rel, min_dim))
     size_px = s(cfg.get("size", 0.1), min_dim if form == "gauge" else canvas_w)
 
     if form == "text":
@@ -664,7 +671,7 @@ def render_value_indicator(
             chart_w,
             chart_h,
             line_color=line_clr,
-            line_thickness=max(1, int(cfg.get("thickness", 0.005) * 200)),
+            line_thickness=max(1, int(float(cfg.get("thickness", 1)))),
             fill_alpha=chart_fill_alpha,
             fill_color=chart_fill_color,
             current_index=ci,
