@@ -246,7 +246,8 @@ def generate_history_chart(
 
 
 def render_custom_text(
-    canvas_w: int, canvas_h: int, font_path: str, cfg: dict[str, Any]
+    canvas_w: int, canvas_h: int, font_path: str, cfg: dict[str, Any],
+    stroke_width: int = 2,
 ) -> tuple[Optional[Image.Image], int, int]:
     """Render a single custom text overlay.
 
@@ -255,6 +256,7 @@ def render_custom_text(
         canvas_h: Canvas height in pixels.
         font_path: Path to the TrueType font file.
         cfg: Dict with keys: enabled, text, x, y, rotation, font_size, color.
+        stroke_width: Outline thickness in pixels (default 2).
 
     Returns:
         (overlay_img, px_x, px_y) or (None, 0, 0) if disabled.
@@ -279,7 +281,7 @@ def render_custom_text(
     th = bbox[3] - bbox[1]
     overlay = Image.new("RGBA", (tw + 8, th + 8), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
-    draw.text((4, 4), text, font=font, fill=fill_color, stroke_width=2, stroke_fill=(0, 0, 0, 200))
+    draw.text((4, 4), text, font=font, fill=fill_color, stroke_width=stroke_width, stroke_fill=(0, 0, 0, 200))
     px = int(round(cfg.get("x", 0.5) * canvas_w))
     py = int(round(cfg.get("y", 0.5) * canvas_h))
     return overlay, px, py
@@ -324,7 +326,8 @@ def render_time_block(
         return None, 0, 0
 
     min_dim = min(canvas_w, canvas_h)
-    outline = int(layout["global"].get("text_outline", 3))
+    outline_raw = int(layout["global"].get("text_outline", 3))
+    outline = max(0, int(round(outline_raw * min_dim / 1000)))
 
     label_px = max(12, s(cfg["font_label"], min_dim))
     date_px = max(14, s(cfg["font_date"], min_dim))
@@ -420,7 +423,8 @@ def render_value_indicator(
     _FORM_MAP = {"TEXT": "text", "SUWAK": "bar", "LICZNIK": "text"}
     form = _FORM_MAP.get(form, form)
     min_dim = min(canvas_w, canvas_h)
-    outline = int(layout["global"].get("text_outline", 3))
+    outline_raw = int(layout["global"].get("text_outline", 3))
+    outline = max(0, int(round(outline_raw * min_dim / 1000)))
     fs = max(8, s(cfg.get("font_size", 0.02), min_dim))
     font = load_font(font_path, fs)
 
@@ -1046,9 +1050,12 @@ def compose_overlay(
                 rotated_paste(img, res, rx, ry, rotation)
                 _bboxes[key] = (int(rx - res.width // 2), int(ry - res.height // 2), res.width, res.height)
 
-    # Custom texts
+    # Custom texts – use resolution-scaled outline
+    ct_outline = max(0, int(round(
+        int(layout.get("global", {}).get("text_outline", 3)) * min(canvas_w, canvas_h) / 1000
+    )))
     for ct_cfg in layout.get("custom_texts", []):
-        ct_res, ctx, cty = render_custom_text(canvas_w, canvas_h, font_path, ct_cfg)
+        ct_res, ctx, cty = render_custom_text(canvas_w, canvas_h, font_path, ct_cfg, stroke_width=ct_outline)
         if ct_res:
             ct_rotation = int(ct_cfg.get("rotation", 0))
             rotated_paste(img, ct_res, ctx, cty, ct_rotation)
