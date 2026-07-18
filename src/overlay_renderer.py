@@ -664,7 +664,7 @@ def render_value_indicator(
             chart_w,
             chart_h,
             line_color=line_clr,
-            line_thickness=max(2, thickness),
+            line_thickness=max(1, int(cfg.get("thickness", 0.005) * 200)),
             fill_alpha=chart_fill_alpha,
             fill_color=chart_fill_color,
             current_index=ci,
