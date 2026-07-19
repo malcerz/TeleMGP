@@ -92,6 +92,7 @@ def generate_history_chart(
     show_axes: bool = True,
     time_labels: Optional[list[str]] = None,
     value_labels: Optional[list[str]] = None,
+    supersample: int = 1,
 ) -> Image.Image:
     """Generate a universal line chart with transparent fill, axes, and optional cursor.
 
@@ -108,14 +109,20 @@ def generate_history_chart(
         show_axes: Whether to draw axes with labels.
         time_labels: 5 strings for X-axis labels.
         value_labels: Strings for Y-axis labels (defaults to [min, max]).
+        supersample: Render at Nx resolution then downscale for anti-aliasing (1=off).
 
     Returns:
         RGBA PIL.Image.
     """
-    axis_left_margin = 50 if show_axes else 0
-    axis_bottom_margin = 22 if show_axes else 0
-    axis_top_margin = 4
-    axis_right_margin = 4
+    ss = max(1, int(supersample))
+    out_w, out_h = width, height
+    width *= ss
+    height *= ss
+    line_thickness *= ss
+    axis_left_margin = (50 if show_axes else 0) * ss
+    axis_bottom_margin = (22 if show_axes else 0) * ss
+    axis_top_margin = 4 * ss
+    axis_right_margin = 4 * ss
 
     has_data = history_values and len(history_values) >= 2
 
@@ -239,6 +246,8 @@ def generate_history_chart(
             outline=(line_color[0], line_color[1], line_color[2], 255),
         )
 
+    if ss > 1:
+        img = img.resize((out_w, out_h), Image.LANCZOS)
     return img
 
 
@@ -682,6 +691,7 @@ def render_value_indicator(
             cursor_color=(255, 255, 255),
             show_axes=True,
             time_labels=time_labels,
+            supersample=2,
         )
 
         margin_top = fs + 8 if label else 0
