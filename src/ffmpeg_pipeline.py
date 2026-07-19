@@ -201,7 +201,20 @@ def _resolve_cache_value(
 
     if not samples:
         return None
-    return interpolate_value(samples, target_dt)
+
+    # FIT field-name alias fallback (e.g. "power" -> "curVpower")
+    if prefer == "fit":
+        _FIT_LOOKUP = {
+            "power": ("curVpower",),
+            "hr": ("heart_rate",),
+            "cad": ("cadence",),
+            "atemp": ("temperature",),
+            "battery": ("battery_soc",),
+        }
+        for alias in _FIT_LOOKUP.get(field_name, ()):
+            samples = WORKER_CACHE.get("fit_data", {}).get(alias, []) or []
+            if samples:
+                break
 
 
 def _resolve_cache_samples(
@@ -227,6 +240,21 @@ def _resolve_cache_samples(
         else:
             gpmf_key = "track_samples" if field_name in ("dist", "track") else f"{field_name}_samples"
             samples = WORKER_CACHE.get("field_samples", {}).get(gpmf_key, []) or []
+
+    # FIT field-name alias fallback (e.g. "power" -> "curVpower")
+    if prefer == "fit":
+        _FIT_LOOKUP = {
+            "power": ("curVpower",),
+            "hr": ("heart_rate",),
+            "cad": ("cadence",),
+            "atemp": ("temperature",),
+            "battery": ("battery_soc",),
+        }
+        for alias in _FIT_LOOKUP.get(field_name, ()):
+            candidate = WORKER_CACHE.get("fit_data", {}).get(alias, []) or []
+            if candidate:
+                samples = candidate
+                break
 
     return samples
 
