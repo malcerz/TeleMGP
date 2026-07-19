@@ -980,15 +980,16 @@ class HudTunerApp:
             return
 
         # Select the indicator in the appropriate list
-        if hit_key in self.fit_ext_fields:
-            # Find and select in ext_list
-            ext_keys = self.fit_ext_fields
+        # GPX extension or FIT fields → ext_list; built-in → indicator_list
+        ext_all = list(GPX_EXT_FIELDS) + self.fit_ext_fields
+        if hit_key in ext_all:
             try:
-                idx = ext_keys.index(hit_key)
+                idx = ext_all.index(hit_key)
                 self.ext_list.selection_clear(0, tk.END)
                 self.ext_list.selection_set(idx)
                 self.ext_list.activate(idx)
                 self.indicator_list.selection_clear(0, tk.END)
+                self.custom_texts_list.selection_clear(0, tk.END)
                 self.build_property_editor_builtin()
             except (ValueError, tk.TclError):
                 pass
