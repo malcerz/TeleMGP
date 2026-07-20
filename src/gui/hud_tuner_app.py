@@ -222,6 +222,10 @@ BUILTIN_FIELDS = {
         ("source", "choice", TELEMETRY_SOURCES, None, None),
         ("size", "float", 0.05, 0.4, 0.001),
         ("zoom", "int", 10, 20, 1),
+        ("map_style", "choice",
+            ["light_all", "light_nolabels", "dark_all", "dark_nolabels",
+             "voyager_all", "voyager_nolabels"],
+         None, None),
     ],
 }
 
@@ -527,7 +531,7 @@ def default_layout(video_width, video_height):
             "track_map": {
                 "enabled": False, "label": "Mapa", "x": 0.02, "y": 0.15, "rotation": 0, "form": "map",
                 "font_size": 0.012, "size": 0.18, "thickness": 1, "zoom": 16,
-                "source": "gpmf", "min_val": 0, "max_val": 1, "ticks": 0,
+                "source": "gpmf", "map_style": "light_all", "min_val": 0, "max_val": 1, "ticks": 0,
             },
         },
         "smoothing": {"method": "moving_average", "strength": 3}
@@ -1371,20 +1375,34 @@ class HudTunerApp:
         self.gpx_gps_track = list(tm.gpx_gps_track)
         self.fit_gps_track = list(tm.fit_gps_track)
 
-    def update_telemetry_data(self):
-        """Load all telemetry data via TelemetryDataManager."""
+    def update_telemetry_data(self, progress_callback=None):
+        """Load all telemetry data via TelemetryDataManager.
+
+        Args:
+            progress_callback: Optional callable(stage_percent, status_text)
+                for fine-grained progress reporting during loading.
+        """
         if not self.telemetry or not self.records:
             return
 
         tm = self.telemetry
         tm.video_path = self.video_path
 
-        # GPMF from ExifTool flat dict
+        def _report(stage: int, text: str) -> None:
+            if progress_callback:
+                progress_callback(stage, text)
+
+        # ── GPMF from ExifTool flat dict ──
+        _report(56, "Odczyt GPMF (ExifTool)...")
         tm.load_gpmf_from_exiftool(self.video_path)
         tm.load_gpmf_records(self.records)
         tm.load_gps_track(self.records)
+        gpmf_speed_n = len(tm.speed_samples)
+        gpmf_gps_n = len(tm.gps_track)
+        gpmf_info = f"GPMF: {gpmf_speed_n} spd, {gpmf_gps_n} GPS"
 
-        # GPX
+        # ── GPX ──
+        _report(62, "Wczytywanie GPX...")
         manual_gpx = self.gpx_path
         if manual_gpx and Path(manual_gpx).suffix.lower() == '.gpx' and Path(manual_gpx).is_file():
             tm.load_gpx(self.video_path, tm.start_dt_utc, manual_path=Path(manual_gpx))
@@ -1402,7 +1420,10 @@ class HudTunerApp:
                 if "GPX" not in cur:
                     self.meta_info_var.set(cur.rstrip() + "  |  GPX: OK")
 
-        # FIT
+        gpx_info = f"GPX: {len(tm.gpx_speed_samples)} pkt" if tm.gpx_speed_samples else "GPX: brak"
+
+        # ── FIT ──
+        _report(66, "Wczytywanie FIT...")
         manual_fit = self.fit_path
         if manual_fit and Path(manual_fit).suffix.lower() == '.fit' and Path(manual_fit).is_file():
             tm.load_fit(self.video_path, tm.start_dt_utc, manual_path=Path(manual_fit))
@@ -1422,7 +1443,12 @@ class HudTunerApp:
             if "FIT" not in cur:
                 self.meta_info_var.set(cur.rstrip() + "  |  FIT: OK")
 
+        fit_info = f"FIT: {len(tm.fit_data)} pól" if tm.fit_data else "FIT: brak"
+
         self._sync_from_telemetry()
+
+        # ── Podsumowanie ──
+        _report(70, f"Telemetria: {gpmf_info} | {gpx_info} | {fit_info}")
 
         print(f"speed_samples (GPMF): {len(self.speed_samples)}")
         print(f"gpx_speed_samples: {len(self.gpx_speed_samples)}")
@@ -1510,7 +1536,7 @@ class HudTunerApp:
                     _progress(55, "Przetwarzanie danych telemetrii...")
                     # Przygotuj dane telemetryczne już w wątku tła
                     self.records = records
-                    self.update_telemetry_data()
+                    self.update_telemetry_data(progress_callback=_progress)
                 _progress(75, "Aktualizacja interfejsu...")
 
                 def sync_ui():
@@ -2219,7 +2245,11 @@ class HudTunerApp:
 
                 # ✅ WAŻNE – dalsza część programu
                 self.records = [flat]
-                self.update_telemetry_data()
+
+                def _meta_progress(stage: int, text: str) -> None:
+                    self.root.after(0, lambda t=text: self.render_stats.config(text=t))
+
+                self.update_telemetry_data(progress_callback=_meta_progress)
 
                 def success():
                     self.render_progress.stop()

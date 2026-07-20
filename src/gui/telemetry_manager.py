@@ -300,15 +300,37 @@ class TelemetryDataManager:
         start_dt: Optional[datetime] = None,
         manual_path: Optional[Path] = None,
     ) -> bool:
-        """Load and process GPX data. Returns True if data was loaded."""
+        """Load and process GPX data. Returns True if data was loaded.
+
+        Extracts GPS track (lat/lon) for map rendering alongside the
+        per-field sample streams.  GPS track is stored in ``self.gpx_gps_track``.
+        """
         if not _GPX_AVAILABLE:
             return False
 
-        if manual_path:
-            gpx_result = self._load_gpx_manual(manual_path, start_dt)
-        else:
-            gpx_result = process_gpx(video_path, start_dt)
+        # Resolve GPX file path
+        gpx_path: Optional[Path] = manual_path
+        if gpx_path is None:
+            auto_gpx = find_gpx_for_video(video_path)
+            if auto_gpx:
+                gpx_path = auto_gpx
+        if gpx_path is None or not Path(gpx_path).is_file():
+            return False
 
+        # Parse raw GPX points (contains lat/lon for GPS track)
+        points = parse_gpx(gpx_path)
+        if not points:
+            return False
+
+        # Extract GPS track (timestamp, lat, lon) for map rendering
+        # GpxPoint = tuple[datetime, float, float, float, dict]
+        self.gpx_gps_track = [
+            (dt, lat, lon) for dt, lat, lon, _, _ in points
+            if lat is not None and lon is not None
+        ]
+
+        # Synchronise to video timeline to get sample streams
+        gpx_result = sync_gpx_to_video(points, start_dt)
         if gpx_result is None:
             return False
 
@@ -325,16 +347,12 @@ class TelemetryDataManager:
         if self.start_dt_utc is None and gpx_speed:
             self.start_dt_utc = gpx_speed[0][0]
 
-        print(f"[TelemetryManager] GPX loaded: speed={len(self.gpx_speed_samples)}", flush=True)
+        print(
+            f"[TelemetryManager] GPX loaded: speed={len(self.gpx_speed_samples)}, "
+            f"gps_track={len(self.gpx_gps_track)} pts",
+            flush=True,
+        )
         return True
-
-    def _load_gpx_manual(self, gpx_path: Path, start_dt: Optional[datetime]) -> Optional[Any]:
-        try:
-            _pts = parse_gpx(gpx_path)
-            return sync_gpx_to_video(_pts, start_dt) if _pts else None
-        except Exception as exc:
-            print(f"[GPX] Error loading manually selected GPX: {exc}", flush=True)
-            return None
 
     # ------------------------------------------------------------------
     # FIT loading (dict-based API matching telemetry_fit)
@@ -348,21 +366,35 @@ class TelemetryDataManager:
     ) -> bool:
         """Load and process FIT data. Returns True if data was loaded.
 
-        Uses the dict-based API: ``process_fit()`` returns ``dict[str, list[Sample]]``.
+        Extracts GPS track (lat/lon) for map rendering alongside the
+        per-field sample dict.  GPS track is stored in ``self.fit_gps_track``.
         """
         if not _FIT_AVAILABLE:
             return False
 
-        if manual_path:
-            fit_result = self._load_fit_manual(manual_path, start_dt)
-        else:
-            # Auto-discover FIT
-            if not manual_path:
-                auto_fit = find_fit_for_video(video_path)
-                if auto_fit:
-                    manual_path = auto_fit
-            fit_result = process_fit(manual_path or video_path, start_dt)
+        # Resolve FIT file path
+        fit_path: Optional[Path] = manual_path
+        if fit_path is None:
+            auto_fit = find_fit_for_video(video_path)
+            if auto_fit:
+                fit_path = auto_fit
+        if fit_path is None or not Path(fit_path).is_file():
+            return False
 
+        # Parse raw FIT records (contains lat/lon for GPS track)
+        records = parse_fit(fit_path)
+        if not records:
+            return False
+
+        # Extract GPS track (timestamp, lat, lon) for map rendering
+        self.fit_gps_track = [
+            (r["timestamp"], r["lat"], r["lon"])
+            for r in records
+            if r.get("lat") is not None and r.get("lon") is not None
+        ]
+
+        # Synchronise to video timeline to get per-field sample dict
+        fit_result = sync_fit_to_video(records, start_dt)
         if not fit_result:
             return False
 
@@ -376,16 +408,12 @@ class TelemetryDataManager:
         if self.start_dt_utc is None and self.fit_data.get("speed"):
             self.start_dt_utc = self.fit_data["speed"][0][0]
 
-        print(f"[TelemetryManager] FIT loaded: keys={list(self.fit_data.keys())}", flush=True)
+        print(
+            f"[TelemetryManager] FIT loaded: keys={list(self.fit_data.keys())}, "
+            f"gps_track={len(self.fit_gps_track)} pts",
+            flush=True,
+        )
         return True
-
-    def _load_fit_manual(self, fit_path: Path, start_dt: Optional[datetime]) -> Optional[dict[str, SampleList]]:
-        try:
-            _pts = parse_fit(fit_path)
-            return sync_fit_to_video(_pts, start_dt) if _pts else None
-        except Exception as exc:
-            print(f"[FIT] Error loading manually selected FIT: {exc}", flush=True)
-            return None
 
     # ------------------------------------------------------------------
     # Clearing
@@ -401,10 +429,12 @@ class TelemetryDataManager:
             self.gpx_atemp_samples.clear()
             self.gpx_hr_samples.clear()
             self.gpx_cad_samples.clear()
+            self.gpx_gps_track.clear()
             self.gpx_path = None
         elif source == "fit":
             self.fit_data.clear()
             self.fit_ext_fields.clear()
+            self.fit_gps_track.clear()
             self.fit_path = None
 
     def clear_all(self) -> None:

@@ -22,7 +22,18 @@ except ImportError:
 
 # ── Tile server config ──────────────────────────────────────────────────────
 
-TILE_URL = "https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"
+# CartoCDN basemap styles (free, no API key required)
+MAP_STYLES: dict[str, str] = {
+    "light_all":       "https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
+    "light_nolabels":  "https://a.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png",
+    "dark_all":        "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
+    "dark_nolabels":   "https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
+    "voyager_all":     "https://a.basemaps.cartocdn.com/voyager_all/{z}/{x}/{y}.png",
+    "voyager_nolabels":"https://a.basemaps.cartocdn.com/voyager_nolabels/{z}/{x}/{y}.png",
+}
+DEFAULT_MAP_STYLE = "light_all"
+
+TILE_URL = MAP_STYLES[DEFAULT_MAP_STYLE]
 TILE_SIZE = 256
 USER_AGENT = "TeleMHUD/1.0"
 REQUEST_DELAY = 0.15  # seconds between tile requests (fair use)
@@ -73,7 +84,7 @@ def _cache_path(z: int, x: int, y: int) -> Path:
 _last_request_time: float = 0.0
 
 
-def download_tile(z: int, x: int, y: int) -> Optional[Image.Image]:
+def download_tile(z: int, x: int, y: int, style: str = DEFAULT_MAP_STYLE) -> Optional[Image.Image]:
     """Download a single map tile, using local disk cache. Respects fair-use delay."""
     if Image is None:
         return None
@@ -90,7 +101,8 @@ def download_tile(z: int, x: int, y: int) -> Optional[Image.Image]:
     if elapsed < REQUEST_DELAY:
         time.sleep(REQUEST_DELAY - elapsed)
 
-    url = TILE_URL.format(z=z, x=x, y=y)
+    url_template = MAP_STYLES.get(style, MAP_STYLES[DEFAULT_MAP_STYLE])
+    url = url_template.format(z=z, x=x, y=y)
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -124,6 +136,7 @@ def render_map_overlay(
     width: int,
     height: int,
     zoom: int = 16,
+    map_style: str = DEFAULT_MAP_STYLE,
     track_color: tuple[int, int, int, int] = (255, 60, 30, 220),
     track_width: int = 3,
     marker_color: tuple[int, int, int, int] = (255, 255, 255, 255),
@@ -168,8 +181,8 @@ def render_map_overlay(
     cx_tile = int(ct_x)
     cy_tile = int(ct_y)
 
-    half_tiles_x = int(math.ceil(tiles_across / 2)) + 1
-    half_tiles_y = int(math.ceil(tiles_down / 2)) + 1
+    half_tiles_x = int(math.ceil(tiles_across / 2))
+    half_tiles_y = int(math.ceil(tiles_down / 2))
     tx1 = cx_tile - half_tiles_x
     tx2 = cx_tile + half_tiles_x
     ty1 = cy_tile - half_tiles_y
@@ -177,13 +190,13 @@ def render_map_overlay(
 
     ntiles = (tx2 - tx1 + 1) * (ty2 - ty1 + 1)
     if ntiles > _MAX_TILES_PER_RENDER:
-        return render_map_overlay(gps_track, current_index, width, height, zoom - 1)
+        return _placeholder(width, height, f"Zbyt duży obszar (zoom {zoom})")
 
     # ── Download tiles ──────────────────────────────────────────────────
     tile_images: dict[tuple[int, int], Image.Image] = {}
     for tx in range(tx1, tx2 + 1):
         for ty in range(ty1, ty2 + 1):
-            tile = download_tile(zoom, tx, ty)
+            tile = download_tile(zoom, tx, ty, style=map_style)
             if tile is not None:
                 tile_images[(tx, ty)] = tile
 

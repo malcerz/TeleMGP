@@ -742,6 +742,7 @@ def render_value_indicator(
             map_img = render_map_overlay(
                 gps_track, ci, map_w, map_h,
                 zoom=int(cfg.get("zoom", 16)),
+                map_style=cfg.get("map_style", "light_all"),
             )
             return map_img, s(cfg["x"], canvas_w), s(cfg["y"], canvas_h), None
         else:

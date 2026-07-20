@@ -1,5 +1,5 @@
 video/*.mp4
-exiftool_files/*
+exiftool_files/
 exiftool.exe
 ffmpeg.exe
 ffplay.exe
