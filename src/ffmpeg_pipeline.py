@@ -96,6 +96,54 @@ def _nt_startupinfo() -> Any:
     return si
 
 
+def detect_best_encoder() -> str:
+    """Detect the best available hardware encoder on this system.
+
+    Returns one of ``'nv'`` (NVIDIA NVENC), ``'intel'`` (Intel QSV) or
+    ``'cpu'`` (libx265 software).  Result is cached for subsequent calls.
+    """
+    global _GPU_DECODER_CACHE
+
+    # Force detection if not yet done
+    hwaccel = detect_gpu_decoder()
+
+    try:
+        r = subprocess.run(
+            ["nvidia-smi"], capture_output=True, timeout=5,
+            **({} if os.name != "nt" else {"startupinfo": _nt_startupinfo()}),
+        )
+        if r.returncode == 0:
+            _GPU_DECODER_CACHE = "cuda"
+            return "nv"
+    except Exception:
+        pass
+
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            capture_output=True, text=True, timeout=5,
+            **({} if os.name != "nt" else {"startupinfo": _nt_startupinfo()}),
+        )
+        if r.returncode == 0:
+            encoders = r.stdout
+            if "hevc_qsv" in encoders:
+                _GPU_DECODER_CACHE = "qsv"
+                return "intel"
+            if "hevc_nvenc" in encoders:
+                _GPU_DECODER_CACHE = "cuda"
+                return "nv"
+    except Exception:
+        pass
+
+    # Fallback: check hwaccels as secondary signal
+    if hwaccel in ("cuda", "d3d11va"):
+        return "nv"
+    if hwaccel == "qsv":
+        return "intel"
+
+    return "cpu"
+
+
 # ── Worker cache initialisation ─────────────────────────────────────────────
 
 
@@ -117,6 +165,7 @@ def init_worker(
     gpx_hr_samples: Optional[list] = None,
     gpx_cad_samples: Optional[list] = None,
     fit_data: Optional[dict[str, list]] = None,
+    gps_track: Optional[list] = None,
     start_dt_utc: Optional[datetime] = None,
     tz_offset_hours: Optional[float] = None,
     speed_samples: Optional[list] = None,
@@ -144,6 +193,7 @@ def init_worker(
     WORKER_CACHE["gpx_hr_samples"] = gpx_hr_samples or []
     WORKER_CACHE["gpx_cad_samples"] = gpx_cad_samples or []
     WORKER_CACHE["fit_data"] = fit_data or {}
+    WORKER_CACHE["gps_track"] = gps_track or []
     WORKER_CACHE["start_dt_utc"] = start_dt_utc
     WORKER_CACHE["tz_offset_hours"] = tz_offset_hours
     WORKER_CACHE["speed_samples"] = speed_samples or []
@@ -415,7 +465,7 @@ def render_overlay_job(job: tuple) -> int:
 
     total_frames = WORKER_CACHE.get("total_overlay_frames", 1)
     current_position = index / max(1, total_frames - 1) if total_frames > 1 else 0.0
-    chart_data = _build_chart_data_worker(layout)
+    chart_data = WORKER_CACHE.get("_precomputed_chart_data", {})
 
     # Build extra indicators from FIT fields
     extra_indicators: dict[str, tuple[float, str, str]] = {}
@@ -435,6 +485,7 @@ def render_overlay_job(job: tuple) -> int:
         battery_value=battery_value,
         chart_data=chart_data, current_position=current_position,
         extra_indicators=extra_indicators,
+        gps_track=WORKER_CACHE.get("gps_track", []),
     )
     img.save(overlay_dir / f"overlay_{index:06d}.bmp", format="BMP")
     return index
@@ -610,11 +661,15 @@ def _build_stream_ffmpeg_cmd(
 ) -> tuple[list[str], str]:
     """Build the ffmpeg command for the streaming pipeline."""
     target_res = RESOLUTION_MAP.get(resolution_name)
-    base_filter = (
-        f"[0:v]scale={render_w}:{render_h}:flags=lanczos[base]"
-        if target_res
-        else "[0:v]null[base]"
-    )
+    if target_res and encoder == "nv":
+        # GPU-accelerated scaling via CUDA (upload → scale → download)
+        base_filter = (
+            f"[0:v]hwupload_cuda,scale_cuda={render_w}:{render_h}[base]"
+        )
+    elif target_res:
+        base_filter = f"[0:v]scale={render_w}:{render_h}:flags=lanczos[base]"
+    else:
+        base_filter = "[0:v]null[base]"
 
     if container_rotation in (90, 270):
         filter_complex = (
@@ -653,7 +708,8 @@ def _build_stream_ffmpeg_cmd(
     cmd: list[str] = [
         ffmpeg_exe, "-y",
         *input_args,
-        "-f", "image2pipe", "-c:v", "png",
+        "-f", "rawvideo", "-pix_fmt", "rgba",
+        "-s", f"{overlay_w}x{overlay_h}",
         "-r", str(generation_fps),
         "-i", "pipe:0",
         "-filter_complex", filter_complex,
@@ -663,13 +719,14 @@ def _build_stream_ffmpeg_cmd(
 
     if encoder == "nv":
         cmd.extend([
-            "-c:v", "hevc_nvenc", "-preset", "p4", "-tune", "hq", "-rc", "vbr",
+            "-c:v", "hevc_nvenc", "-preset", "p1", "-tune", "hq", "-rc", "vbr",
             "-cq", "24", "-pix_fmt", "yuv420p", "-gpu", str(gpu), "-c:a", "copy",
         ])
     elif encoder == "intel":
         cmd.extend([
-            "-c:v", "hevc_qsv", "-global_quality", "24", "-look_ahead", "1",
-            "-pix_fmt", "nv12", "-c:a", "copy",
+            "-c:v", "hevc_qsv", "-preset", "veryfast",
+            "-global_quality", "24", "-look_ahead", "0",
+            "-async_depth", "4", "-pix_fmt", "nv12", "-c:a", "copy",
         ])
     else:
         cmd.extend([
@@ -799,7 +856,7 @@ def render_overlay_frame(
 
     total_frames = WORKER_CACHE.get("total_overlay_frames", 1)
     current_position = index / max(1, total_frames - 1) if total_frames > 1 else 0.0
-    chart_data = _build_chart_data_worker(layout)
+    chart_data = WORKER_CACHE.get("_precomputed_chart_data", {})
 
     # Build extra indicators from FIT fields
     extra_indicators: dict[str, tuple[float, str, str]] = {}
@@ -819,6 +876,7 @@ def render_overlay_frame(
         battery_value=battery_value,
         chart_data=chart_data, current_position=current_position,
         extra_indicators=extra_indicators,
+        gps_track=WORKER_CACHE.get("gps_track", []),
     )
 
 
@@ -826,7 +884,7 @@ def render_overlay_frame(
 
 
 def render_frame_bytes_job(job: tuple) -> tuple[int, bytes]:
-    """Multiprocessing worker: render one overlay frame, return (index, png_bytes)."""
+    """Multiprocessing worker: render one overlay frame, return (index, raw_rgba_bytes)."""
     index = job[0]
     start_dt_utc = WORKER_CACHE.get("start_dt_utc")
     tz_offset_hours = WORKER_CACHE.get("tz_offset_hours")
@@ -840,9 +898,8 @@ def render_frame_bytes_job(job: tuple) -> tuple[int, bytes]:
         speed_samples, track_samples, alt_samples,
         target_fps, update_rate_step,
     )
-    buf = io.BytesIO()
-    img.save(buf, format="PNG", compress_level=1)
-    return index, buf.getvalue()
+    # Raw RGBA bytes — no PNG encode/decode overhead
+    return index, img.tobytes()
 
 
 # ── Streaming pipeline (producer-consumer) ──────────────────────────────────
@@ -876,6 +933,7 @@ def stream_overlay_to_ffmpeg(
     gpx_hr_samples: Optional[list] = None,
     gpx_cad_samples: Optional[list] = None,
     fit_data: Optional[dict[str, list]] = None,
+    gps_track: Optional[list] = None,
     progress_cb: Optional[Callable] = None,
     cancel_event: Optional[Any] = None,
     active_process_holder: Optional[dict] = None,
@@ -904,10 +962,15 @@ def stream_overlay_to_ffmpeg(
         gpx_speed_samples, gpx_track_samples, gpx_alt_samples,
         gpx_power_samples, gpx_atemp_samples, gpx_hr_samples, gpx_cad_samples,
         fit_data,
+        gps_track,
         start_dt_utc, tz_offset_hours,
         speed_samples, track_samples, alt_samples,
         target_fps, update_rate_step, total_overlay_frames,
     )
+
+    # Precompute chart data once (identical for every frame — avoid per-frame rebuild)
+    precomputed_chart_data = _build_chart_data_worker(layout)
+    WORKER_CACHE["_precomputed_chart_data"] = precomputed_chart_data
 
     if cancel_event is not None and cancel_event.is_set():
         return 0
@@ -986,6 +1049,7 @@ def stream_overlay_to_ffmpeg(
                     gpx_speed_samples, gpx_track_samples, gpx_alt_samples,
                     gpx_power_samples, gpx_atemp_samples, gpx_hr_samples, gpx_cad_samples,
                     fit_data,
+                    gps_track,
                     start_dt_utc, tz_offset_hours,
                     speed_samples, track_samples, alt_samples,
                     target_fps, update_rate_step, total_overlay_frames,
@@ -1259,13 +1323,14 @@ def apply_overlay_video(
 
     if encoder == "nv":
         cmd.extend([
-            "-c:v", "hevc_nvenc", "-preset", "p4", "-tune", "hq", "-rc", "vbr",
+            "-c:v", "hevc_nvenc", "-preset", "p1", "-tune", "hq", "-rc", "vbr",
             "-cq", "24", "-pix_fmt", "yuv420p", "-gpu", str(gpu), "-c:a", "copy",
         ])
     elif encoder == "intel":
         cmd.extend([
-            "-c:v", "hevc_qsv", "-global_quality", "24", "-look_ahead", "1",
-            "-pix_fmt", "nv12", "-c:a", "copy",
+            "-c:v", "hevc_qsv", "-preset", "veryfast",
+            "-global_quality", "24", "-look_ahead", "0",
+            "-async_depth", "4", "-pix_fmt", "nv12", "-c:a", "copy",
         ])
     else:
         cmd.extend([

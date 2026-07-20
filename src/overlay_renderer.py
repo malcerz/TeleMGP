@@ -404,6 +404,7 @@ def render_value_indicator(
     max_distance_m: Optional[float] = None,
     history_data: Optional[list[float] | dict[str, Any]] = None,
     current_position: Optional[float] = None,
+    gps_track: Optional[list[tuple[Any, float, float]]] = None,
 ) -> tuple[Optional[Image.Image], int, int, Optional[dict[str, Any]]]:
     """Render a single telemetry indicator (text, gauge, bar, or chart form).
 
@@ -725,6 +726,40 @@ def render_value_indicator(
 
         return final_img, s(cfg["x"], canvas_w), s(cfg["y"], canvas_h), None
 
+    elif form == "map":
+        if gps_track and len(gps_track) >= 2:
+            from src.map_renderer import render_map_overlay
+
+            ci = None
+            if current_position is not None:
+                ci = int(round(current_position * (len(gps_track) - 1)))
+                ci = max(0, min(len(gps_track) - 1, ci))
+            else:
+                ci = 0
+
+            map_w = size_px
+            map_h = max(40, int(map_w * 0.65))
+            map_img = render_map_overlay(
+                gps_track, ci, map_w, map_h,
+                zoom=int(cfg.get("zoom", 16)),
+            )
+            return map_img, s(cfg["x"], canvas_w), s(cfg["y"], canvas_h), None
+        else:
+            # Placeholder with diagnostic info
+            z = int(cfg.get("zoom", 16))
+            ph_w = size_px
+            ph_h = max(60, int(ph_w * 0.65))
+            ph = Image.new("RGBA", (ph_w, ph_h), (20, 20, 30, 220))
+            draw = ImageDraw.Draw(ph)
+            if not gps_track:
+                msg = "Brak danych GPS w wideo"
+            else:
+                msg = f"GPS: {len(gps_track)} pkt (za malo)"
+            draw.text((8, 8), msg, font=font, fill=(200, 200, 200, 255),
+                      stroke_width=outline, stroke_fill=(0, 0, 0, 255))
+            draw.text((8, 24 + fs), f"Zoom: {z}", font=font, fill=(160, 160, 160, 255))
+            return ph, s(cfg["x"], canvas_w), s(cfg["y"], canvas_h), None
+
     return None, 0, 0, None
 
 
@@ -758,6 +793,7 @@ def compose_overlay(
     chart_data: Optional[dict[str, list[float]]] = None,
     current_position: Optional[float] = None,
     extra_indicators: Optional[dict[str, tuple[float, str, str]]] = None,
+    gps_track: Optional[list[tuple[Any, float, float]]] = None,
 ) -> Image.Image:
     """Compose the complete HUD overlay image from all indicators.
 
@@ -823,6 +859,7 @@ def compose_overlay(
         ("hr_text", hr_value if hr_value is not None else 0, "BPM", "HR"),
         ("cad_text", cad_value if cad_value is not None else 0, "RPM", "Cad"),
         ("battery_text", battery_value if battery_value is not None else 0, "%", "Bat"),
+        ("track_map", 0.0, "", "Mapa"),
     ]
 
     for key, default_value, unit, default_label in indicator_defs:
@@ -892,6 +929,7 @@ def compose_overlay(
             max_distance_m=max_distance_m,
             history_data=chart_vals,
             current_position=current_position,
+            gps_track=gps_track,
         )
 
         if res:
@@ -1099,6 +1137,7 @@ def render_preview(
     chart_data: Optional[dict[str, list[float]]] = None,
     current_position: Optional[float] = None,
     extra_indicators: Optional[dict[str, tuple[float, str, str]]] = None,
+    gps_track: Optional[list[tuple[Any, float, float]]] = None,
 ) -> Image.Image:
     """Render a preview image: source frame with HUD overlay composited on top."""
     # Avoid a full-resolution copy if the image is already RGBA
@@ -1134,6 +1173,7 @@ def render_preview(
         chart_data=chart_data,
         current_position=current_position,
         extra_indicators=extra_indicators,
+        gps_track=gps_track,
     )
     img.alpha_composite(overlay)
     return img

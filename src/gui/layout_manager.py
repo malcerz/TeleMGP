@@ -142,10 +142,31 @@ class LayoutManager:
         if 0 <= index < len(texts):
             del texts[index]
 
-    def update_custom_text(
-        self, index: int, **kwargs: Any
-    ) -> None:
+    def update_indicator(self, key: str, updates: dict[str, Any]) -> None:
+        """Update a single indicator's config."""
+        ind = self.layout.setdefault("indicators", {}).get(key)
+        if ind is not None:
+            ind.update(updates)
+
+    def disable_indicators_except(self, keep_keys: list[str]) -> None:
+        """Disable all indicators except those in *keep_keys*."""
+        inds = self.layout.get("indicators", {})
+        for key in inds:
+            if key not in keep_keys:
+                inds[key]["enabled"] = False
+
+    def get_builtin_keys(self, ext_fields: list[str]) -> list[str]:
+        """Return indicator keys that are NOT in ext_fields and NOT fit_*."""
+        inds = self.layout.get("indicators", {})
+        return [k for k in inds if k not in ext_fields and not k.startswith("fit_")]
+
+    def get_ext_keys(self, gpx_ext_fields: list[str], fit_ext_fields: list[str]) -> list[str]:
+        """Return GPX + FIT extension keys."""
+        return list(gpx_ext_fields) + list(fit_ext_fields)
+
+    def update_custom_text(self, index: int, **kwargs: Any) -> None:
         """Update properties of a custom text entry."""
         texts = self.layout.get("custom_texts", [])
         if 0 <= index < len(texts):
             texts[index].update(kwargs)
+

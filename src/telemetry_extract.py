@@ -596,6 +596,46 @@ def extract_track_samples(
     return cumulative
 
 
+def extract_gps_track(
+    records: list[dict[str, Any]]
+) -> list[tuple[datetime, float, float]]:
+    """Extract raw GPS lat/lon track points (for map rendering).
+
+    Unlike ``extract_track_samples`` which returns cumulative distance,
+    this returns the actual geographic coordinates.
+    """
+    records = ensure_records_list(records)
+    points: list[tuple[datetime, float, float]] = []
+
+    for rec in records:
+        flat = flatten_record(rec)
+        for key, val in flat.items():
+            if not key.endswith(":GPSDateTime"):
+                continue
+            prefix = key.split(":")[0]
+            dt = parse_exif_datetime(val)
+            if dt is None:
+                continue
+            raw_lat = flat.get(f"{prefix}:GPSLatitude")
+            raw_lon = flat.get(f"{prefix}:GPSLongitude")
+            lat = parse_gps_coord(raw_lat)
+            lon = parse_gps_coord(raw_lon)
+            if lat is None or lon is None:
+                continue
+            if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                continue
+            points.append((dt, lat, lon))
+
+    points.sort(key=lambda x: x[0])
+
+    # Deduplicate by timestamp
+    deduped: list[tuple[datetime, float, float]] = []
+    for dt, lat, lon in points:
+        if not deduped or dt != deduped[-1][0]:
+            deduped.append((dt, lat, lon))
+    return deduped
+
+
 # ── Data extraction: ExifTool flat-dict helpers ─────────────────────────────
 
 

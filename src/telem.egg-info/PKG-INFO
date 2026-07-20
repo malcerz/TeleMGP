@@ -1,0 +1,17 @@
+Metadata-Version: 2.4
+Name: telem
+Version: 0.16.9
+Summary: GoPro video telemetry overlay application
+Project-URL: Homepage, https://github.com/adramad/telem
+Requires-Python: >=3.10
+Requires-Dist: Pillow>=10.0
+Provides-Extra: fit
+Requires-Dist: fitparse>=1.2; extra == "fit"
+Provides-Extra: video
+Requires-Dist: opencv-python>=4.8; extra == "video"
+Provides-Extra: json-accel
+Requires-Dist: orjson>=3.9; extra == "json-accel"
+Provides-Extra: all
+Requires-Dist: fitparse>=1.2; extra == "all"
+Requires-Dist: opencv-python>=4.8; extra == "all"
+Requires-Dist: orjson>=3.9; extra == "all"

@@ -19,34 +19,46 @@
       "enabled": true,
       "label": "",
       "x": 0.5,
-      "y": 0.78,
+      "y": 0.968,
       "rotation": 0,
       "form": "gauge",
-      "font_size": 0.0125,
-      "size": 0.108,
-      "thickness": 0.007,
-      "min_val": 0,
-      "max_val": 60,
+      "font_size": 0.013,
+      "size": 0.16,
+      "thickness": 1,
+      "min_val": 0.0,
+      "max_val": 60.0,
       "ticks": 6,
-      "source": "fit"
+      "source": "fit",
+      "show_value": false,
+      "value_offset_x": -0.3,
+      "value_offset_y": -0.3,
+      "chart_color": "#FF3232",
+      "fill_color": "#FF3232",
+      "fill_alpha": 0
     },
     "speed_text": {
       "enabled": true,
       "label": "",
-      "x": 0.5,
-      "y": 0.855,
+      "x": 0.457,
+      "y": 0.946,
       "rotation": 0,
       "form": "text",
       "font_size": 0.04,
       "size": 0.1,
-      "thickness": 0.001,
-      "min_val": 0,
-      "max_val": 100,
+      "thickness": 1,
+      "min_val": 0.0,
+      "max_val": 100.0,
       "ticks": 0,
-      "source": "fit"
+      "source": "fit",
+      "show_value": false,
+      "value_offset_x": -0.3,
+      "value_offset_y": -0.3,
+      "chart_color": "#FF3232",
+      "fill_color": "#FF3232",
+      "fill_alpha": 0
     },
     "dist_visual": {
-      "enabled": true,
+      "enabled": false,
       "label": "",
       "x": 0.5,
       "y": 0.925,
@@ -67,7 +79,7 @@
       "source": "fit"
     },
     "dist_text": {
-      "enabled": true,
+      "enabled": false,
       "label": "",
       "x": 0.5,
       "y": 0.955,
@@ -82,7 +94,7 @@
       "source": "fit"
     },
     "alt_visual": {
-      "enabled": true,
+      "enabled": false,
       "label": "Alt",
       "x": 0.04,
       "y": 0.8,
@@ -103,7 +115,7 @@
       "source": "fit"
     },
     "alt_text": {
-      "enabled": true,
+      "enabled": false,
       "label": "",
       "x": 0.025,
       "y": 0.8,
@@ -118,7 +130,7 @@
       "source": "fit"
     },
     "iso_text": {
-      "enabled": true,
+      "enabled": false,
       "label": "ISO",
       "x": 0.9,
       "y": 0.08,
@@ -132,7 +144,7 @@
       "ticks": 0
     },
     "exposure_text": {
-      "enabled": true,
+      "enabled": false,
       "label": "Exp",
       "x": 0.82,
       "y": 0.08,
@@ -146,7 +158,7 @@
       "ticks": 0
     },
     "temp_text": {
-      "enabled": true,
+      "enabled": false,
       "label": "Temp",
       "x": 0.74,
       "y": 0.08,
@@ -160,7 +172,7 @@
       "ticks": 0
     },
     "power_text": {
-      "enabled": true,
+      "enabled": false,
       "label": "Moc",
       "x": 0.185,
       "y": 0.08,
@@ -177,46 +189,64 @@
       "enabled": true,
       "label": "ATemp",
       "x": 0.265,
-      "y": 0.08,
+      "y": 0.376,
       "rotation": 0,
-      "form": "text",
+      "form": "chart",
       "font_size": 0.018,
-      "size": 0.1,
-      "thickness": 0.001,
-      "min_val": -20,
-      "max_val": 60,
-      "ticks": 0
+      "size": 0.302,
+      "thickness": 1,
+      "min_val": 0.0,
+      "max_val": 60.0,
+      "ticks": 0,
+      "show_value": false,
+      "value_offset_x": -0.3,
+      "value_offset_y": -0.3,
+      "chart_color": "#80ffff",
+      "fill_color": "#8000ff",
+      "fill_alpha": 190
     },
     "hr_text": {
       "enabled": true,
       "label": "HR",
-      "x": 0.345,
-      "y": 0.08,
+      "x": 0.188,
+      "y": 0.796,
       "rotation": 0,
-      "form": "text",
+      "form": "chart",
       "font_size": 0.018,
-      "size": 0.1,
-      "thickness": 0.001,
-      "min_val": 0,
-      "max_val": 250,
-      "ticks": 0
+      "size": 0.403,
+      "thickness": 1,
+      "min_val": 60.0,
+      "max_val": 160.0,
+      "ticks": 0,
+      "show_value": false,
+      "value_offset_x": -0.3,
+      "value_offset_y": -0.3,
+      "chart_color": "#FF3232",
+      "fill_color": "#FF3232",
+      "fill_alpha": 105
     },
     "cad_text": {
       "enabled": true,
       "label": "Cad",
-      "x": 0.41,
-      "y": 0.08,
+      "x": 0.774,
+      "y": 0.86,
       "rotation": 0,
-      "form": "text",
+      "form": "chart",
       "font_size": 0.018,
-      "size": 0.1,
-      "thickness": 0.001,
-      "min_val": 0,
-      "max_val": 200,
-      "ticks": 0
+      "size": 0.368,
+      "thickness": 1,
+      "min_val": 0.0,
+      "max_val": 200.0,
+      "ticks": 0,
+      "show_value": false,
+      "value_offset_x": -0.3,
+      "value_offset_y": -0.3,
+      "chart_color": "#ffff00",
+      "fill_color": "#FF3232",
+      "fill_alpha": 95
     },
     "battery_text": {
-      "enabled": true,
+      "enabled": false,
       "label": "Bat",
       "x": 0.49,
       "y": 0.08,
@@ -229,24 +259,46 @@
       "max_val": 100,
       "ticks": 0
     },
-    "fit_K1_text": {
+    "track_map": {
       "enabled": true,
-      "label": "K1",
-      "x": 0.5,
-      "y": 0.08,
+      "label": "Mapa",
+      "x": 0.675,
+      "y": 0.5163636363636364,
       "rotation": 0,
-      "form": "text",
+      "form": "map",
+      "font_size": 0.012,
+      "size": 0.18,
+      "thickness": 1,
+      "zoom": 18,
+      "source": "fit",
+      "min_val": 0,
+      "max_val": 1,
+      "ticks": 0
+    },
+    "fit_K1_text": {
+      "enabled": false,
+      "label": "K1",
+      "x": 0.509,
+      "y": 0.442,
+      "rotation": 0,
+      "form": "gauge",
       "font_size": 0.018,
-      "size": 0.1,
-      "thickness": 0.001,
+      "size": 0.163,
+      "thickness": 1,
       "min_val": 0.0,
       "max_val": 89.0,
       "ticks": 0,
       "source": "fit",
-      "unit": ""
+      "unit": "",
+      "show_value": false,
+      "value_offset_x": -0.3,
+      "value_offset_y": -0.3,
+      "chart_color": "#FF3232",
+      "fill_color": "#FF3232",
+      "fill_alpha": 0
     },
     "fit_K2_text": {
-      "enabled": true,
+      "enabled": false,
       "label": "K2",
       "x": 0.5,
       "y": 0.08,
@@ -262,7 +314,7 @@
       "unit": ""
     },
     "fit_cadence_text": {
-      "enabled": true,
+      "enabled": false,
       "label": "Cadence",
       "x": 0.22,
       "y": 0.817,
@@ -284,7 +336,7 @@
       "fill_alpha": 0
     },
     "fit_curVpower_text": {
-      "enabled": true,
+      "enabled": false,
       "label": "Curvpower",
       "x": 0.79,
       "y": 0.882,
@@ -306,7 +358,7 @@
       "fill_alpha": 0
     },
     "fit_distance_text": {
-      "enabled": true,
+      "enabled": false,
       "label": "Distance",
       "x": 0.5,
       "y": 0.08,
@@ -322,7 +374,7 @@
       "unit": ""
     },
     "fit_enhanced_altitude_text": {
-      "enabled": true,
+      "enabled": false,
       "label": "Enhanced Altitude",
       "x": 0.5,
       "y": 0.08,
@@ -338,7 +390,7 @@
       "unit": ""
     },
     "fit_enhanced_speed_text": {
-      "enabled": true,
+      "enabled": false,
       "label": "Enhanced Speed",
       "x": 0.5,
       "y": 0.08,
@@ -354,7 +406,7 @@
       "unit": ""
     },
     "fit_fractional_cadence_text": {
-      "enabled": true,
+      "enabled": false,
       "label": "Fractional Cadence",
       "x": 0.5,
       "y": 0.08,
@@ -370,7 +422,7 @@
       "unit": ""
     },
     "fit_gopro_battery_text": {
-      "enabled": true,
+      "enabled": false,
       "label": "Gopro Battery",
       "x": 0.5,
       "y": 0.08,
@@ -386,7 +438,7 @@
       "unit": ""
     },
     "fit_heart_rate_text": {
-      "enabled": true,
+      "enabled": false,
       "label": "Heart Rate",
       "x": 0.5,
       "y": 0.468,
@@ -408,7 +460,7 @@
       "fill_alpha": 0
     },
     "fit_passing_speed_text": {
-      "enabled": true,
+      "enabled": false,
       "label": "Passing Speed",
       "x": 0.5,
       "y": 0.08,
@@ -424,7 +476,7 @@
       "unit": ""
     },
     "fit_passing_speedabs_text": {
-      "enabled": true,
+      "enabled": false,
       "label": "Passing Speedabs",
       "x": 0.5,
       "y": 0.08,
@@ -440,7 +492,7 @@
       "unit": ""
     },
     "fit_radar_current_text": {
-      "enabled": true,
+      "enabled": false,
       "label": "Radar Current",
       "x": 0.5,
       "y": 0.08,
@@ -456,7 +508,7 @@
       "unit": ""
     },
     "fit_temperature_text": {
-      "enabled": true,
+      "enabled": false,
       "label": "Temperature",
       "x": 0.5,
       "y": 0.08,
@@ -467,6 +519,54 @@
       "thickness": 0.001,
       "min_val": 19.0,
       "max_val": 30.0,
+      "ticks": 0,
+      "source": "fit",
+      "unit": ""
+    },
+    "fit_P01_text": {
+      "enabled": true,
+      "label": "P01",
+      "x": 0.5,
+      "y": 0.08,
+      "rotation": 0,
+      "form": "text",
+      "font_size": 0.018,
+      "size": 0.1,
+      "thickness": 0.001,
+      "min_val": 77.0,
+      "max_val": 142.0,
+      "ticks": 0,
+      "source": "fit",
+      "unit": ""
+    },
+    "fit_battery_text": {
+      "enabled": true,
+      "label": "Battery",
+      "x": 0.5,
+      "y": 0.08,
+      "rotation": 0,
+      "form": "text",
+      "font_size": 0.018,
+      "size": 0.1,
+      "thickness": 0.001,
+      "min_val": 65.0,
+      "max_val": 68.0,
+      "ticks": 0,
+      "source": "fit",
+      "unit": ""
+    },
+    "fit_solar_text": {
+      "enabled": true,
+      "label": "Solar",
+      "x": 0.5,
+      "y": 0.08,
+      "rotation": 0,
+      "form": "text",
+      "font_size": 0.018,
+      "size": 0.1,
+      "thickness": 0.001,
+      "min_val": 0.0,
+      "max_val": 100.0,
       "ticks": 0,
       "source": "fit",
       "unit": ""

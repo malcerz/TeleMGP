@@ -34,7 +34,8 @@ try:
     _GPX_AVAILABLE = True
 except ImportError:
     _GPX_AVAILABLE = False
-    def process_gpx(video_path, video_start_dt=None):  # noqa: E302
+    def process_gpx(video_path, video_start_dt=None):  # noqa: E302gp.py
+
         return None
     def find_gpx_for_video(video_path):  # noqa: E302
         return None
@@ -55,7 +56,7 @@ except ImportError:
     def parse_fit(path):  # noqa: E302
         return None
     def sync_fit_to_video(points, video_start_dt):  # noqa: E302
-        return None, None, None, None, None, None, None, None
+        return {}
 
 # Import GUI components from the refactored src.gui package
 try:
@@ -85,19 +86,18 @@ except ImportError:
 # Import manager classes (refactored logic)
 try:
     from src.gui.layout_manager import LayoutManager
-    from src.gui.render_controller import RenderController
     from src.gui.telemetry_manager import TelemetryDataManager
     _MANAGERS_AVAILABLE = True
 except ImportError:
     TelemetryDataManager = object  # fallback
     LayoutManager = object
-    RenderController = object
     _MANAGERS_AVAILABLE = False
 
 # All telemetry extraction, interpolation and smoothing functions
 # have been moved to src/telemetry_extract.py
 from src.telemetry_extract import (  # noqa: E402
     extract_speed_samples, extract_altitude_samples, extract_track_samples,
+    extract_gps_track,
     extract_iso_samples, extract_exposure_samples, extract_temperature_samples,
     extract_samples_exiftool, extract_altitude_samples_exiftool,
     load_telemetry_exiftool,
@@ -119,7 +119,7 @@ from src.telemetry_extract import (  # noqa: E402
     load_json_with_fallback,
 )
 
-APP_VERSION = "0.16.9"
+APP_VERSION = "0.3"
 RESOLUTION_OPTIONS = ['source', '8k', '5.3k', '4k', '1080p', '720p', '480p']
 ENCODER_OPTIONS = ['nv', 'intel', 'cpu']
 GPS_OPTIONS = ['3d', '2d']
@@ -218,6 +218,11 @@ BUILTIN_FIELDS = {
     "hr_text":       get_value_schema(),
     "cad_text":      get_value_schema(),
     "battery_text":  get_value_schema(),
+    "track_map":     get_common_schema() + [
+        ("source", "choice", TELEMETRY_SOURCES, None, None),
+        ("size", "float", 0.05, 0.4, 0.001),
+        ("zoom", "int", 10, 20, 1),
+    ],
 }
 
 TELEMETRY_TAGS = [
@@ -519,6 +524,11 @@ def default_layout(video_width, video_height):
                 "enabled": True, "label": "Bat", "x": 0.49, "y": 0.08, "rotation": 0, "form": "text",
                 "font_size": 0.018, "size": 0.1, "thickness": 0.001, "min_val": 0, "max_val": 100, "ticks": 0
             },
+            "track_map": {
+                "enabled": False, "label": "Mapa", "x": 0.02, "y": 0.15, "rotation": 0, "form": "map",
+                "font_size": 0.012, "size": 0.18, "thickness": 1, "zoom": 16,
+                "source": "gpmf", "min_val": 0, "max_val": 1, "ticks": 0,
+            },
         },
         "smoothing": {"method": "moving_average", "strength": 3}
     }
@@ -606,6 +616,7 @@ from src.ffmpeg_pipeline import (
     WORKER_CACHE,
     RESOLUTION_MAP,
     detect_gpu_decoder,
+    detect_best_encoder,
     init_worker,
     _get_source_samples,
     _resolve_cache_value,
@@ -656,6 +667,13 @@ class HudTunerApp:
         # Dane z FIT (dynamiczne pola, dict[str, list])
         self.fit_data: dict[str, list] = {}
         self.fit_ext_fields: list[str] = []   # FIT-origin indicator keys
+        # GPS track for map (lat/lon points)
+        self.gps_track: list = []
+        self.gpx_gps_track: list = []
+        self.fit_gps_track: list = []
+        self.gps_track: list = []              # GPMF GPS track for map
+        self.gpx_gps_track: list = []          # GPX GPS track
+        self.fit_gps_track: list = []          # FIT GPS track
         self.iso_samples      = []
         self.exposure_samples    = []
         self.temperature_samples = []
@@ -688,16 +706,20 @@ class HudTunerApp:
                 ensure_records_fn=ensure_records_list,
                 load_json_fallback_fn=load_json_with_fallback,
                 write_records_fn=write_records_to_json,
+                load_exiftool_fn=load_telemetry_exiftool,
+                extract_samples_exiftool_fn=extract_samples_exiftool,
+                extract_altitude_exiftool_fn=extract_altitude_samples_exiftool,
+                extract_gps_track_fn=extract_gps_track,
+                find_gps_anchor_fn=find_gps_anchor,
+                smooth_values_fn=smooth_speed_values,
             )
             self.layout_mgr = LayoutManager(
                 default_layout_fn=default_layout,
                 normalize_layout_fn=normalize_layout,
             )
-            self.render_ctrl = RenderController(render_pipeline_fn=self.render_pipeline)
         else:
             self.telemetry = None
             self.layout_mgr = None
-            self.render_ctrl = None
 
         self.video_duration_s = 0.0
         self._refresh_after_id = None
@@ -706,8 +728,10 @@ class HudTunerApp:
         self._render_executor = None
         self.render_button = None
         self.indicator_bboxes = {}  # {key: (x,y,w,h)} in original image coords, for clickable preview
+        self._drag_start: Optional[tuple[int, int]] = None
+        self._drag_indicator: Optional[str] = None
 
-        self.encoder_var         = tk.StringVar(value='nv')
+        self.encoder_var         = tk.StringVar(value=detect_best_encoder())
         self.rotation_var        = tk.StringVar(value='auto')
         self.resolution_var      = tk.StringVar(value='source')
         self.update_rate_var     = tk.StringVar(value='Full')
@@ -836,7 +860,9 @@ class HudTunerApp:
         self.preview_label = tk.Label(preview_wrap, bg='#222')
         self.preview_label.pack(fill=tk.BOTH, expand=True)
         self.preview_label.bind('<Configure>', self.on_preview_resize)
-        self.preview_label.bind('<Button-1>', self.on_preview_click)
+        self.preview_label.bind('<Button-1>', self._on_preview_mouse_down)
+        self.preview_label.bind('<B1-Motion>', self._on_preview_drag_motion)
+        self.preview_label.bind('<ButtonRelease-1>', self._on_preview_mouse_up)
 
         seek_frame = tk.Frame(center_pw)
         center_pw.add(seek_frame, minsize=90)
@@ -940,33 +966,35 @@ class HudTunerApp:
     def on_preview_resize(self, event=None):
         self.schedule_refresh(60)
 
-    def on_preview_click(self, event):
-        """Handle click on preview label – find indicator under cursor and select it."""
-        if not self.speed_samples or not self.indicator_bboxes:
-            return
+    # ── Drag-to-move indicators on preview ─────────────────────────────────
+
+    def _map_preview_to_orig(self, px: int, py: int) -> tuple[float, float]:
+        """Map preview-label pixel coords to original image coords."""
         pw = self.preview_label.winfo_width()
         ph = self.preview_label.winfo_height()
         src_w, src_h = self.src_img.size
         if pw < 10 or ph < 10 or src_w < 1 or src_h < 1:
-            return
-        # Map click coords back to original image coords
+            return 0.0, 0.0
         scale = min(pw / src_w, ph / src_h)
         thumb_w = int(src_w * scale)
         thumb_h = int(src_h * scale)
         offset_x = (pw - thumb_w) // 2
         offset_y = (ph - thumb_h) // 2
-        orig_x = (event.x - offset_x) / scale
-        orig_y = (event.y - offset_y) / scale
+        return (px - offset_x) / scale, (py - offset_y) / scale
 
-        # Find indicator that contains the click point
+    def _on_preview_mouse_down(self, event):
+        """Record drag start and find indicator under cursor."""
+        if not self.speed_samples or not self.indicator_bboxes:
+            return
+        orig_x, orig_y = self._map_preview_to_orig(event.x, event.y)
         hit_key = None
-        # Check in reverse order so top-most (last drawn) wins
-        indicator_order = [
-            'alt_text', 'alt_visual', 'dist_text', 'dist_visual',
-            'speed_text', 'speed_visual', 'time_block',
-            'temp_text', 'exposure_text', 'iso_text',
-            'cad_text', 'hr_text', 'atemp_text', 'power_text', 'battery_text',
-        ] + self.fit_ext_fields
+        indicator_order = (
+            ['alt_text', 'alt_visual', 'dist_text', 'dist_visual',
+             'speed_text', 'speed_visual', 'time_block', 'track_map',
+             'temp_text', 'exposure_text', 'iso_text',
+             'cad_text', 'hr_text', 'atemp_text', 'power_text', 'battery_text']
+            + self.fit_ext_fields
+        )
         for key in indicator_order:
             bbox = self.indicator_bboxes.get(key)
             if bbox is None:
@@ -975,12 +1003,82 @@ class HudTunerApp:
             if x <= orig_x <= x + w and y <= orig_y <= y + h:
                 hit_key = key
                 break
+        if hit_key is None:
+            return
+        self._drag_start = (event.x, event.y)
+        self._drag_indicator = hit_key
 
+    def _on_preview_drag_motion(self, event):
+        """Drag the indicator: update x/y in layout and refresh preview."""
+        if self._drag_start is None or self._drag_indicator is None:
+            return
+        key = self._drag_indicator
+        cfg = self.layout.get('indicators', {}).get(key)
+        if cfg is None:
+            return
+        src_w, src_h = self.src_img.size
+        if src_w < 1 or src_h < 1:
+            return
+        # Map current mouse position to original image coords
+        orig_x, orig_y = self._map_preview_to_orig(event.x, event.y)
+        # Convert to relative (0.0-1.0) layout coordinates
+        cfg['x'] = max(0.0, min(1.0, orig_x / src_w))
+        cfg['y'] = max(0.0, min(1.0, orig_y / src_h))
+        # Also update the property editor widget if visible
+        if key in self.property_widgets:
+            for field_name in ('x', 'y'):
+                w = self.property_widgets.get(field_name)
+                if w is not None:
+                    try:
+                        w.var.set(cfg[field_name])
+                        w.sync_entry()
+                    except Exception:
+                        pass
+        self.schedule_refresh(20)
+
+    def _on_preview_mouse_up(self, event):
+        """Mouse release: if drag occurred, refresh; otherwise run click-to-select."""
+        if self._drag_start is None:
+            return
+        dx = abs(event.x - self._drag_start[0])
+        dy = abs(event.y - self._drag_start[1])
+        was_drag = dx > 3 or dy > 3
+        self._drag_start = None
+        drag_indicator = self._drag_indicator
+        self._drag_indicator = None
+        if was_drag:
+            self.refresh()
+        elif drag_indicator is not None:
+            self.on_preview_click(event)
+
+    def _find_indicator_at(self, orig_x: float, orig_y: float) -> Optional[str]:
+        """Return indicator key at original-image coords, or None."""
+        indicator_order = (
+            ['alt_text', 'alt_visual', 'dist_text', 'dist_visual',
+             'speed_text', 'speed_visual', 'time_block', 'track_map',
+             'temp_text', 'exposure_text', 'iso_text',
+             'cad_text', 'hr_text', 'atemp_text', 'power_text', 'battery_text']
+            + self.fit_ext_fields
+        )
+        for key in indicator_order:
+            bbox = self.indicator_bboxes.get(key)
+            if bbox is None:
+                continue
+            x, y, w, h = bbox
+            if x <= orig_x <= x + w and y <= orig_y <= y + h:
+                return key
+        return None
+
+    def on_preview_click(self, event):
+        """Handle click on preview label – find indicator under cursor and select it."""
+        if not self.speed_samples or not self.indicator_bboxes:
+            return
+        orig_x, orig_y = self._map_preview_to_orig(event.x, event.y)
+        hit_key = self._find_indicator_at(orig_x, orig_y)
         if hit_key is None:
             return
 
         # Select the indicator in the appropriate list
-        # GPX extension or FIT fields → ext_list; built-in → indicator_list
         ext_all = list(GPX_EXT_FIELDS) + self.fit_ext_fields
         if hit_key in ext_all:
             try:
@@ -994,7 +1092,6 @@ class HudTunerApp:
             except (ValueError, tk.TclError):
                 pass
         else:
-            # Find and select in indicator_list
             all_builtin = [self.indicator_list.get(i) for i in range(self.indicator_list.size())]
             try:
                 idx = all_builtin.index(hit_key)
@@ -1243,175 +1340,95 @@ class HudTunerApp:
             cfg[field_name] = widget.get()
         self.schedule_refresh(60)
 
-    def update_telemetry_data(self):
-        if not self.records:
+    # ── Telemetry delegation ────────────────────────────────────────────────
+
+    def _sync_from_telemetry(self):
+        """Copy telemetry data from the manager into local attributes."""
+        if not self.telemetry:
             return
-        try:
-            prefer_3d = True
-        except:
-            prefer_3d = True
+        tm = self.telemetry
+        self.speed_samples = tm.speed_samples
+        self.alt_samples = tm.alt_samples
+        self.track_samples = tm.track_samples
+        self.iso_samples = tm.iso_samples
+        self.exposure_samples = tm.exposure_samples
+        self.temperature_samples = tm.temperature_samples
+        self.start_dt_utc = tm.start_dt_utc
+        self.records = tm.records
+        # GPX
+        self.gpx_speed_samples = tm.gpx_speed_samples
+        self.gpx_alt_samples = tm.gpx_alt_samples
+        self.gpx_track_samples = tm.gpx_track_samples
+        self.gpx_power_samples = tm.gpx_power_samples
+        self.gpx_atemp_samples = tm.gpx_atemp_samples
+        self.gpx_hr_samples = tm.gpx_hr_samples
+        self.gpx_cad_samples = tm.gpx_cad_samples
+        # FIT
+        self.fit_data = dict(tm.fit_data) if tm.fit_data else {}
+        self.fit_ext_fields = list(tm.fit_ext_fields)
+        # GPS track for map
+        self.gps_track = list(tm.gps_track)
+        self.gpx_gps_track = list(tm.gpx_gps_track)
+        self.fit_gps_track = list(tm.fit_gps_track)
 
-        flat = load_telemetry_exiftool(self.video_path)
+    def update_telemetry_data(self):
+        """Load all telemetry data via TelemetryDataManager."""
+        if not self.telemetry or not self.records:
+            return
 
-        # ── GPMF (GoPro telemetry) ──────────────────────────────────────
-        self.speed_samples = extract_samples_exiftool(flat)
-        speeds = [s for _, s in self.speed_samples]
-        smoothed = smooth_speed_values(speeds, window=5)
-        self.speed_samples = [
-            (self.speed_samples[i][0], smoothed[i])
-            for i in range(len(self.speed_samples))
-        ]
+        tm = self.telemetry
+        tm.video_path = self.video_path
 
-        if self.speed_samples:
-            self.start_dt_utc = self.speed_samples[0][0]
+        # GPMF from ExifTool flat dict
+        tm.load_gpmf_from_exiftool(self.video_path)
+        tm.load_gpmf_records(self.records)
+        tm.load_gps_track(self.records)
+
+        # GPX
+        manual_gpx = self.gpx_path
+        if manual_gpx and Path(manual_gpx).suffix.lower() == '.gpx' and Path(manual_gpx).is_file():
+            tm.load_gpx(self.video_path, tm.start_dt_utc, manual_path=Path(manual_gpx))
         else:
-            self.start_dt_utc = None
+            tm.load_gpx(self.video_path, tm.start_dt_utc)
 
-        self.track_samples = extract_track_samples(self.records)
-        self.alt_samples   = extract_altitude_samples_exiftool(flat)
-        self.iso_samples      = extract_iso_samples(self.records)
-        self.exposure_samples    = extract_exposure_samples(self.records)
-        self.temperature_samples = extract_temperature_samples(self.records)
+        if tm.gpx_speed_samples:
+            if not self.gpx_path:
+                tm.auto_switch_source(self.layout, "gpx")
+                # Update UI labels
+                auto_path = find_gpx_for_video(self.video_path)
+                if auto_path:
+                    self.gpx_info_var.set(f'GPX: {auto_path.name}  (auto)  {len(tm.gpx_speed_samples)} pkt')
+                cur = self.meta_info_var.get()
+                if "GPX" not in cur:
+                    self.meta_info_var.set(cur.rstrip() + "  |  GPX: OK")
 
-        if self.alt_samples:
-            alts = [a for _, a in self.alt_samples]
-            smoothed_alts = smooth_speed_values(alts, window=5)
-            self.alt_samples = [
-                (self.alt_samples[i][0], smoothed_alts[i])
-                for i in range(len(self.alt_samples))
-            ]
-
-        # Synchronizacja: szukamy absolutnego startu filmu (T=0)
-        anchor = find_gps_anchor(self.records)
-        if anchor:
-            self.start_dt_utc = anchor
-        elif self.speed_samples:
-            self.start_dt_utc = self.speed_samples[0][0]
-
-        if self.speed_samples:
-            self.speed_samples = smooth_speed_samples(self.speed_samples, "moving_average", SMOOTHING_WINDOW)
-        if self.alt_samples:
-            self.alt_samples = smooth_speed_samples(self.alt_samples, "moving_average", SMOOTHING_WINDOW)
-
-        # ── GPX ──────────────────────────────────────────────────────────
-        # Zapisujemy dane GPX osobno – źródło wybierane per-wskaźnik w layout
-        self.gpx_speed_samples = []
-        self.gpx_track_samples = []
-        self.gpx_alt_samples = []
-        self.gpx_power_samples = []
-        self.gpx_atemp_samples = []
-        self.gpx_hr_samples = []
-        self.gpx_cad_samples = []
-
-        if self.video_path:
-            manual_gpx = getattr(self, 'gpx_path', None)
-            if manual_gpx and Path(manual_gpx).suffix.lower() == '.gpx' and Path(manual_gpx).is_file():
-                try:
-                    _pts = parse_gpx(manual_gpx)
-                    gpx_result = sync_gpx_to_video(_pts, self.start_dt_utc) if _pts else None
-                except Exception as _e:
-                    print('[GPX] Blad wczytywania recznie wybranego GPX: ' + str(_e), flush=True)
-                    gpx_result = None
-            else:
-                gpx_result = process_gpx(self.video_path, self.start_dt_utc)
-
-            if gpx_result is not None:
-                gpx_speed, gpx_track, gpx_alt, gpx_power, gpx_atemp, gpx_hr, gpx_cad = gpx_result
-                if gpx_speed:
-                    self.gpx_speed_samples = smooth_speed_samples(gpx_speed, "moving_average", SMOOTHING_WINDOW)
-                    print("[GPX] gpx_speed_samples: " + str(len(self.gpx_speed_samples)), flush=True)
-                if gpx_track:
-                    self.gpx_track_samples = gpx_track
-                    print("[GPX] gpx_track_samples: " + str(len(self.gpx_track_samples)), flush=True)
-                if gpx_alt:
-                    self.gpx_alt_samples = smooth_speed_samples(gpx_alt, "moving_average", SMOOTHING_WINDOW)
-                    print("[GPX] gpx_alt_samples: " + str(len(self.gpx_alt_samples)), flush=True)
-                if gpx_power:
-                    self.gpx_power_samples = gpx_power
-                    print("[GPX] gpx_power_samples: " + str(len(self.gpx_power_samples)), flush=True)
-                if gpx_atemp:
-                    self.gpx_atemp_samples = gpx_atemp
-                    print("[GPX] gpx_atemp_samples: " + str(len(self.gpx_atemp_samples)), flush=True)
-                if gpx_hr:
-                    self.gpx_hr_samples = gpx_hr
-                    print("[GPX] gpx_hr_samples: " + str(len(self.gpx_hr_samples)), flush=True)
-                if gpx_cad:
-                    self.gpx_cad_samples = gpx_cad
-                    print("[GPX] gpx_cad_samples: " + str(len(self.gpx_cad_samples)), flush=True)
-                if self.start_dt_utc is None and gpx_speed:
-                    self.start_dt_utc = gpx_speed[0][0]
-                # Automatycznie przełącz wskaźniki GPS na źródło GPX (tylko przy auto-wykryciu, nie przy ręcznym wyborze)
-                if not getattr(self, 'gpx_path', None):
-                    for ind_key in ('speed_visual', 'speed_text', 'dist_visual', 'dist_text', 'alt_visual', 'alt_text'):
-                        if ind_key in self.layout.get('indicators', {}):
-                            self.layout['indicators'][ind_key]['source'] = 'gpx'
-                try:
-                    cur = self.meta_info_var.get()
-                    if "GPX" not in cur:
-                        self.meta_info_var.set(cur.rstrip() + "  |  GPX: OK")
-                    if not getattr(self, 'gpx_path', None):
-                        auto_path = find_gpx_for_video(self.video_path)
-                        if auto_path:
-                            self.gpx_info_var.set('GPX: ' + auto_path.name + '  (auto)  ' + str(len(gpx_speed)) + ' pkt')
-                except Exception:
-                    pass
-
-        # ── FIT (dynamiczne pola) ────────────────────────────────────────
-        self.fit_data = {}
-
-        manual_fit = getattr(self, 'fit_path', None)
-        # Auto-discover FIT if no manual path was selected
-        if not (manual_fit and Path(manual_fit).suffix.lower() == '.fit' and Path(manual_fit).is_file()):
-            if self.video_path:
-                auto_fit = find_fit_for_video(self.video_path)
-                if auto_fit:
-                    manual_fit = auto_fit
-                    print(f"[FIT] Auto-discovered: {manual_fit}", flush=True)
-
+        # FIT
+        manual_fit = self.fit_path
         if manual_fit and Path(manual_fit).suffix.lower() == '.fit' and Path(manual_fit).is_file():
-            try:
-                fit_result = process_fit(manual_fit, self.start_dt_utc)
-            except Exception as _e:
-                print('[FIT] Blad wczytywania FIT: ' + str(_e), flush=True)
-                fit_result = None
+            tm.load_fit(self.video_path, tm.start_dt_utc, manual_path=Path(manual_fit))
+        else:
+            tm.load_fit(self.video_path, tm.start_dt_utc)
 
-            if fit_result:
-                self.fit_data = {}
-                for key, samples in fit_result.items():
-                    if key in ('speed', 'alt'):
-                        self.fit_data[key] = smooth_speed_samples(samples, "moving_average", SMOOTHING_WINDOW)
-                    else:
-                        self.fit_data[key] = samples
-                    print(f"[FIT] {key}_samples: {len(self.fit_data[key])}", flush=True)
+        if tm.fit_data:
+            if not self.fit_path:
+                tm.auto_switch_source(self.layout, "fit")
+            total_pts = sum(len(v) for v in tm.fit_data.values())
+            fields = ', '.join(sorted(tm.fit_data.keys()))
+            fit_name = Path(manual_fit).name if manual_fit else "auto"
+            self.fit_info_var.set(f'FIT: {fit_name}  {total_pts} pkt\n  [{fields}]')
+            if not self.fit_path and manual_fit:
+                self.fit_path = manual_fit
+            cur = self.meta_info_var.get()
+            if "FIT" not in cur:
+                self.meta_info_var.set(cur.rstrip() + "  |  FIT: OK")
 
-                if self.start_dt_utc is None and self.fit_data.get('speed'):
-                    self.start_dt_utc = self.fit_data['speed'][0][0]
+        self._sync_from_telemetry()
 
-                # Automatycznie przełącz wskaźniki GPS na źródło FIT
-                for ind_key in ('speed_visual', 'speed_text', 'dist_visual', 'dist_text', 'alt_visual', 'alt_text'):
-                    if ind_key in self.layout.get('indicators', {}):
-                        self.layout['indicators'][ind_key]['source'] = 'fit'
-                try:
-                    cur = self.meta_info_var.get()
-                    if "FIT" not in cur:
-                        self.meta_info_var.set(cur.rstrip() + "  |  FIT: OK")
-                    total_pts = sum(len(v) for v in self.fit_data.values())
-                    fields = ', '.join(sorted(self.fit_data.keys()))
-                    self.fit_info_var.set('FIT: ' + Path(manual_fit).name + '  ' + str(total_pts) + ' pkt\n  [' + fields + ']')
-                    # Store discovered path for later use
-                    if not getattr(self, 'fit_path', None):
-                        self.fit_path = manual_fit
-                except Exception:
-                    pass
-
-        print("speed_samples (GPMF):", len(self.speed_samples))
-        print("gpx_speed_samples:", len(self.gpx_speed_samples))
-        print("fit_data keys:", list(self.fit_data.keys()))
-        print("alt_samples (GPMF):", len(self.alt_samples))
-        print("gpx_alt_samples:", len(self.gpx_alt_samples))
-        # NOTE: _register_fit_fields() and build_property_editor_builtin()
-        # are called by the caller (sync_ui / open_video), not here,
-        # to avoid threading issues with Tkinter widgets.
+        print(f"speed_samples (GPMF): {len(self.speed_samples)}")
+        print(f"gpx_speed_samples: {len(self.gpx_speed_samples)}")
+        print(f"fit_data keys: {list(self.fit_data.keys())}")
+        print(f"alt_samples (GPMF): {len(self.alt_samples)}")
+        print(f"gpx_alt_samples: {len(self.gpx_alt_samples)}")
 
 
     def open_image(self):
@@ -1580,32 +1597,20 @@ class HudTunerApp:
                 self.fit_info_var.set('FIT: brak modulu telemetry_fit')
                 return
             try:
-                fit_result = process_fit(self.fit_path, self.start_dt_utc)
-                if not fit_result:
-                    messagebox.showwarning('FIT', 'Plik FIT nie zawiera rekordow z czasem.')
-                    return
-                self.fit_data = {}
-                for key, samples in fit_result.items():
-                    if key in ('speed', 'alt'):
-                        self.fit_data[key] = smooth_speed_samples(samples, 'moving_average', SMOOTHING_WINDOW)
-                    else:
-                        self.fit_data[key] = samples
-                if self.fit_data.get('speed'):
-                    self.start_dt_utc = self.fit_data['speed'][0][0]
-                total_pts = sum(len(v) for v in self.fit_data.values())
-                fields = ', '.join(sorted(self.fit_data.keys()))
-
-                # Przelacz wskazniki GPS na zrodlo FIT
-                for ind_key in ('speed_visual', 'speed_text', 'dist_visual', 'dist_text', 'alt_visual', 'alt_text'):
-                    if ind_key in self.layout.get('indicators', {}):
-                        self.layout['indicators'][ind_key]['source'] = 'fit'
-                self.build_property_editor_builtin()
-
-                self.fit_info_var.set(f'FIT: {self.fit_path.name}  ({total_pts} pkt  [{fields}])')
-                print(f'[FIT] Wczytano recznie: {self.fit_path}  ({total_pts} punktow)', flush=True)
-                self._register_fit_fields()
-                self.build_property_editor_builtin()
-                self.refresh()
+                if self.telemetry:
+                    self.telemetry.fit_path = self.fit_path
+                    ok = self.telemetry.load_fit(self.video_path, self.start_dt_utc, manual_path=self.fit_path)
+                    if not ok:
+                        messagebox.showwarning('FIT', 'Plik FIT nie zawiera rekordow z czasem.')
+                        return
+                    self.telemetry.auto_switch_source(self.layout, "fit")
+                    self._sync_from_telemetry()
+                    total_pts = sum(len(v) for v in self.fit_data.values())
+                    fields = ', '.join(sorted(self.fit_data.keys()))
+                    self.fit_info_var.set(f'FIT: {self.fit_path.name}  ({total_pts} pkt  [{fields}])')
+                    self._register_fit_fields()
+                    self.build_property_editor_builtin()
+                    self.refresh()
             except Exception as exc:
                 messagebox.showerror('Blad FIT', str(exc))
                 self.fit_info_var.set('FIT: blad wczytywania')
@@ -1617,103 +1622,51 @@ class HudTunerApp:
                 self.gpx_info_var.set('GPX: brak modulu telemetry_gpx')
                 return
             try:
-                points = parse_gpx(self.gpx_path)
-                if not points:
-                    messagebox.showwarning('GPX', 'Plik GPX nie zawiera punktow z czasem.')
-                    return
-                gpx_speed, gpx_track, gpx_alt, gpx_power, gpx_atemp, gpx_hr, gpx_cad = sync_gpx_to_video(points, self.start_dt_utc)
-                if gpx_speed:
-                    self.gpx_speed_samples = smooth_speed_samples(gpx_speed, 'moving_average', SMOOTHING_WINDOW)
-                if gpx_track:
-                    self.gpx_track_samples = gpx_track
-                if gpx_alt:
-                    self.gpx_alt_samples = smooth_speed_samples(gpx_alt, 'moving_average', SMOOTHING_WINDOW)
-                if gpx_power:
-                    self.gpx_power_samples = gpx_power
-                if gpx_atemp:
-                    self.gpx_atemp_samples = gpx_atemp
-                if gpx_hr:
-                    self.gpx_hr_samples = gpx_hr
-                if gpx_cad:
-                    self.gpx_cad_samples = gpx_cad
-                if self.start_dt_utc is None and gpx_speed:
-                    self.start_dt_utc = gpx_speed[0][0]
-
-                # Automatycznie przelacz wskazniki GPS na zrodlo GPX
-                for ind_key in ('speed_visual', 'speed_text', 'dist_visual', 'dist_text', 'alt_visual', 'alt_text'):
-                    if ind_key in self.layout.get('indicators', {}):
-                        self.layout['indicators'][ind_key]['source'] = 'gpx'
-                self.build_property_editor_builtin()
-
-                n = len(points)
-                self.gpx_info_var.set(f'GPX: {self.gpx_path.name}  ({n} pkt)')
-                print(f'[GPX] Wczytano recznie: {self.gpx_path}  ({n} punktow)', flush=True)
-                self.refresh()
+                if self.telemetry:
+                    self.telemetry.gpx_path = self.gpx_path
+                    ok = self.telemetry.load_gpx(self.video_path, self.start_dt_utc, manual_path=self.gpx_path)
+                    if not ok:
+                        messagebox.showwarning('GPX', 'Plik GPX nie zawiera punktow z czasem.')
+                        return
+                    self.telemetry.auto_switch_source(self.layout, "gpx")
+                    self._sync_from_telemetry()
+                    self.gpx_info_var.set(f'GPX: {self.gpx_path.name}  ({len(self.gpx_speed_samples)} pkt)')
+                    self.build_property_editor_builtin()
+                    self.refresh()
             except Exception as exc:
                 messagebox.showerror('Blad GPX', str(exc))
                 self.gpx_info_var.set('GPX: blad wczytywania')
 
     def _get_samples_for_source(self, source_type):
         """Return (speed_samples, track_samples, alt_samples) for the given source."""
-        if source_type == 'gpx':
-            return (self.gpx_speed_samples or self.speed_samples,
-                    self.gpx_track_samples or self.track_samples,
-                    self.gpx_alt_samples or self.alt_samples)
-        if source_type == 'fit':
-            return (self.fit_data.get('speed') or self.speed_samples,
-                    self.fit_data.get('track') or self.track_samples,
-                    self.fit_data.get('alt') or self.alt_samples)
+        if self.telemetry:
+            return self.telemetry.get_samples_for_source(source_type)
         return (self.speed_samples, self.track_samples, self.alt_samples)
 
     def resolve_source_value(self, field_name, target_dt, prefer="fit"):
-        """Return interpolated telemetry value with FIT > GPX > GPMF priority."""
-        alt_prefix = "gpx" if prefer == "fit" else "fit"
-        pref = self.fit_data.get(field_name, []) if prefer == "fit" else getattr(self, f"{prefer}_{field_name}_samples", [])
-        alt  = self.fit_data.get(field_name, []) if alt_prefix == "fit" else getattr(self, f"{alt_prefix}_{field_name}_samples", [])
-        samples = pref or alt
-        # FIT field-name fallback (e.g. "power" → "curVpower", "hr" → "heart_rate")
-        if not samples and prefer == "fit":
-            _FIT_LOOKUP = {
-                "power": ("curVpower",),
-                "hr": ("heart_rate",),
-                "cad": ("cadence",),
-                "atemp": ("temperature",),
-                "battery": ("battery_soc",),
-            }
-            for alias in _FIT_LOOKUP.get(field_name, ()):
-                samples = self.fit_data.get(alias, [])
-                if samples:
-                    break
-        if not samples and field_name in ("speed", "alt", "dist", "track", "iso", "exposure", "temperature"):
-            gpmf_attr = "track_samples" if field_name in ("dist", "track") else f"{field_name}_samples"
-            samples = getattr(self, gpmf_attr, []) or []
-        if not samples:
-            return None
-        return interpolate_value(samples, target_dt)
+        if self.telemetry:
+            return self.telemetry.resolve_value(field_name, target_dt, prefer)
+        return None
 
     def resolve_source_samples(self, field_name, prefer="fit"):
-        """Return raw sample list with FIT > GPX > GPMF priority."""
-        alt_prefix = "gpx" if prefer == "fit" else "fit"
-        pref = self.fit_data.get(field_name, []) if prefer == "fit" else getattr(self, f"{prefer}_{field_name}_samples", [])
-        alt  = self.fit_data.get(field_name, []) if alt_prefix == "fit" else getattr(self, f"{alt_prefix}_{field_name}_samples", [])
-        samples = pref or alt
-        # FIT field-name fallback (e.g. "power" → "curVpower", "hr" → "heart_rate")
-        if not samples and prefer == "fit":
-            _FIT_LOOKUP = {
-                "power": ("curVpower",),
-                "hr": ("heart_rate",),
-                "cad": ("cadence",),
-                "atemp": ("temperature",),
-                "battery": ("battery_soc",),
-            }
-            for alias in _FIT_LOOKUP.get(field_name, ()):
-                samples = self.fit_data.get(alias, [])
-                if samples:
-                    break
-        if not samples and field_name in ("speed", "alt", "dist", "track", "iso", "exposure", "temperature"):
-            gpmf_attr = "track_samples" if field_name in ("dist", "track") else f"{field_name}_samples"
-            samples = getattr(self, gpmf_attr, []) or []
-        return samples
+        if self.telemetry:
+            return self.telemetry.resolve_samples(field_name, prefer)
+        return []
+
+    def _register_fit_fields(self, layout: Optional[dict] = None) -> None:
+        if layout is None:
+            layout = self.layout
+        if not self.telemetry or not self.fit_data:
+            return
+
+        new_keys = self.telemetry.register_fit_fields(
+            layout, BUILTIN_FIELDS, get_value_schema
+        )
+        if layout is self.layout:
+            self.fit_ext_fields = self.telemetry.fit_ext_fields = (
+                self.telemetry.fit_ext_fields + new_keys
+            )
+            self._rebuild_ext_list()
 
     def _register_fit_fields(self, layout: Optional[dict] = None) -> None:
         """Create ``fit_*_text`` indicators for every FIT field.
@@ -1902,20 +1855,11 @@ class HudTunerApp:
 
             try:
                 # Cache min/max alt (przelicz tylko gdy dane się zmienią)
-                if not hasattr(self, '_alt_cache') or self._alt_cache.get('src') != self.layout['indicators'].get('alt_visual', {}).get('source', 'gpmf'):
-                    min_alt = None
-                    max_alt = None
-                    alt_src = self.layout['indicators'].get('alt_visual', {}).get('source', 'gpmf')
-                    _, _, alt_s = self._get_samples_for_source(alt_src)
-                    if alt_s:
-                        alts = [a for _, a in alt_s]
-                        if alts:
-                            min_alt = min(alts)
-                            max_alt = max(alts)
-                    self._alt_cache = {'min': min_alt, 'max': max_alt, 'src': alt_src}
+                alt_src = self.layout['indicators'].get('alt_visual', {}).get('source', 'gpmf')
+                if self.telemetry:
+                    min_alt, max_alt = self.telemetry.get_alt_range(alt_src)
                 else:
-                    min_alt = self._alt_cache['min']
-                    max_alt = self._alt_cache['max']
+                    min_alt = max_alt = None
 
                 # ── Przygotuj dane wykresów (chart) dla podglądu ──
                 total_duration = getattr(self, 'video_duration_s', 1.0)
@@ -1971,6 +1915,18 @@ class HudTunerApp:
                     extra_indicators[key] = (val, unit, label)
 
                 self.indicator_bboxes.clear()
+                # Resolve GPS track for map indicator
+                map_src = "gpmf"
+                if self.telemetry:
+                    map_src = self.layout["indicators"].get("track_map", {}).get("source", "gpmf")
+                map_gps_track = None
+                if map_src == "gpx":
+                    map_gps_track = self.gpx_gps_track or self.gps_track
+                elif map_src == "fit":
+                    map_gps_track = self.fit_gps_track or self.gps_track
+                else:
+                    map_gps_track = self.gps_track
+
                 preview = render_preview(self.src_img, self.layout, self.font_path,
                                          date_txt, time_txt, speed_val, dist_m, max_dist, alt_val, min_alt, max_alt, iso_val, exp_val, temp_val,
                                          indicator_values=indicator_values, max_speed_kmh=max_speed_kmh,
@@ -1979,7 +1935,8 @@ class HudTunerApp:
                                          battery_value=battery_val,
                                          _bboxes=self.indicator_bboxes,
                                          chart_data=chart_data, current_position=current_position,
-                                         extra_indicators=extra_indicators)
+                                         extra_indicators=extra_indicators,
+                                         gps_track=map_gps_track)
                 preview.thumbnail((pw, ph), Image.BILINEAR)
                 self.photo = ImageTk.PhotoImage(preview)
                 self.preview_label.configure(image=self.photo)
@@ -2122,8 +2079,6 @@ class HudTunerApp:
         threading.Thread(target=run_render, daemon=True).start()
 
     def cancel_render(self):
-        if self.render_ctrl is not None:
-            self.render_ctrl.cancel_render()
         self.render_cancel_event.set()
         if isinstance(self._active_process, dict):
             process = self._active_process.get('process')
@@ -2523,6 +2478,7 @@ class HudTunerApp:
             gpx_hr_samples=gpx_hr_samples,
             gpx_cad_samples=gpx_cad_samples,
             fit_data=fit_data,
+            gps_track=getattr(self, 'gps_track', None) or [],
             progress_cb=update_ui,
             cancel_event=self.render_cancel_event,
             active_process_holder=self._active_process,

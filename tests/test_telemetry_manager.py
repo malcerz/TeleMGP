@@ -83,7 +83,7 @@ class TestTelemetryDataManager:
         assert manager.records == []
         assert manager.speed_samples == []
         assert manager.gpx_speed_samples == []
-        assert manager.fit_speed_samples == []
+        assert manager.fit_data == {}
         assert manager.start_dt_utc is None
 
     def test_load_gpmf_records(self, manager: TelemetryDataManager) -> None:
@@ -155,11 +155,11 @@ class TestTelemetryDataManager:
     def test_clear_all(self, manager: TelemetryDataManager) -> None:
         """clear_all() should wipe all data."""
         manager.load_gpmf_records([{"dummy": True}])
-        manager.fit_speed_samples = [(datetime.now(), 10.0)]
+        manager.fit_data["speed"] = [(datetime.now(), 10.0)]
         manager.clear_all()
         assert manager.records == []
         assert manager.speed_samples == []
-        assert manager.fit_speed_samples == []
+        assert manager.fit_data == {}
 
     def test_rotation_no_data(self, manager: TelemetryDataManager) -> None:
         """get_rotation_from_metadata() should return 0 when no rotation function."""
