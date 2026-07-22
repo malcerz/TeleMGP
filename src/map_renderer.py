@@ -127,6 +127,34 @@ def download_tile(z: int, x: int, y: int, style: str = DEFAULT_MAP_STYLE) -> Opt
     return img
 
 
+# ── In-memory caches ───────────────────────────────────────────────────────
+
+# Cache: (zoom, tx1, tx2, ty1, ty2, style) -> (stitched_img, scale, draw_w, draw_h, off_x, off_y)
+_TILE_CACHE: dict[str, tuple] = {}
+
+# Cache: (zoom, track_fingerprint) -> (abs_tx_list, abs_ty_list)  — no trig per frame
+_TRACK_CACHE: dict[str, tuple] = {}
+
+
+def _tile_cache_key(zoom: int, tx1: int, tx2: int, ty1: int, ty2: int, style: str) -> str:
+    return f"{zoom}_{tx1}_{tx2}_{ty1}_{ty2}_{style}"
+
+
+def _track_fingerprint(gps_track: list) -> int:
+    """Return a stable hash for a GPS track (length + first/mid/last)."""
+    if not gps_track:
+        return 0
+    n = len(gps_track)
+    return hash((n, gps_track[0], gps_track[n // 2], gps_track[-1]))
+
+
+def clear_map_cache() -> None:
+    """Clear all cached tiles and track projections.
+    Call this when zoom, map_style, or the GPS track changes."""
+    _TILE_CACHE.clear()
+    _TRACK_CACHE.clear()
+
+
 # ── Map overlay renderer ────────────────────────────────────────────────────
 
 
@@ -192,57 +220,75 @@ def render_map_overlay(
     if ntiles > _MAX_TILES_PER_RENDER:
         return _placeholder(width, height, f"Zbyt duży obszar (zoom {zoom})")
 
-    # ── Download tiles ──────────────────────────────────────────────────
-    tile_images: dict[tuple[int, int], Image.Image] = {}
-    for tx in range(tx1, tx2 + 1):
-        for ty in range(ty1, ty2 + 1):
-            tile = download_tile(zoom, tx, ty, style=map_style)
-            if tile is not None:
-                tile_images[(tx, ty)] = tile
+    # ── Check tile cache ─────────────────────────────────────────────────
+    tkey = _tile_cache_key(zoom, tx1, tx2, ty1, ty2, map_style)
+    cached_base = _TILE_CACHE.get(tkey)
+    if cached_base is not None:
+        tile_base_img, scale, draw_w, draw_h, off_x, off_y = cached_base
+    else:
+        # ── Download tiles ───────────────────────────────────────────────
+        tile_images: dict[tuple[int, int], Image.Image] = {}
+        for tx in range(tx1, tx2 + 1):
+            for ty in range(ty1, ty2 + 1):
+                tile = download_tile(zoom, tx, ty, style=map_style)
+                if tile is not None:
+                    tile_images[(tx, ty)] = tile
 
-    if not tile_images:
-        return _placeholder(width, height, "Nie można pobrać mapy")
+        if not tile_images:
+            return _placeholder(width, height, "Nie można pobrać mapy")
 
-    # ── Stitch tiles ────────────────────────────────────────────────────
-    cols = tx2 - tx1 + 1
-    rows = ty2 - ty1 + 1
-    map_w = cols * TILE_SIZE
-    map_h = rows * TILE_SIZE
-    map_img = Image.new("RGBA", (map_w, map_h), (0, 0, 0, 0))
+        # ── Stitch tiles ─────────────────────────────────────────────────
+        cols = tx2 - tx1 + 1
+        rows = ty2 - ty1 + 1
+        map_w = cols * TILE_SIZE
+        map_h = rows * TILE_SIZE
+        tile_base_img = Image.new("RGBA", (map_w, map_h), (0, 0, 0, 0))
 
-    for (tx, ty), tile in tile_images.items():
-        px = (tx - tx1) * TILE_SIZE
-        py = (ty - ty1) * TILE_SIZE
-        map_img.paste(tile, (px, py), tile)
+        for (tx, ty), tile in tile_images.items():
+            px = (tx - tx1) * TILE_SIZE
+            py = (ty - ty1) * TILE_SIZE
+            tile_base_img.paste(tile, (px, py), tile)
 
-    scale = min(target_w / map_w, target_h / map_h)
-    draw_w = int(map_w * scale)
-    draw_h = int(map_h * scale)
-    map_img = map_img.resize((draw_w, draw_h), Image.BILINEAR)
+        scale = min(target_w / map_w, target_h / map_h)
+        draw_w = int(map_w * scale)
+        draw_h = int(map_h * scale)
+        tile_base_img = tile_base_img.resize((draw_w, draw_h), Image.BILINEAR)
+
+        off_x = (width - draw_w) // 2
+        off_y = (height - draw_h) // 2
+
+        _TILE_CACHE[tkey] = (tile_base_img, scale, draw_w, draw_h, off_x, off_y)
 
     # ── Output canvas ───────────────────────────────────────────────────
     canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(canvas)
-    off_x = (width - draw_w) // 2
-    off_y = (height - draw_h) // 2
     draw.rectangle(
         (off_x - 1, off_y - 1, off_x + draw_w, off_y + draw_h),
         outline=(255, 255, 255, 80), width=1,
     )
-    canvas.paste(map_img, (off_x, off_y), map_img)
+    canvas.paste(tile_base_img, (off_x, off_y), tile_base_img)
 
-    # ── Project GPS track to pixel coords (clamped to viewport) ─────────
+    # ── Get cached absolute tile coords for track points ────────────────
+    fingerprint = _track_fingerprint(gps_track)
+    tcache_key = f"{zoom}_{fingerprint}"
+    cached_track = _TRACK_CACHE.get(tcache_key)
+    if cached_track is not None:
+        abs_tx_list, abs_ty_list = cached_track
+    else:
+        abs_tx_list = [lon_to_tile_x(lon, zoom) for _, _, lon in gps_track]
+        abs_ty_list = [lat_to_tile_y(lat, zoom) for _, lat, _ in gps_track]
+        _TRACK_CACHE[tcache_key] = (abs_tx_list, abs_ty_list)
+
+    # ── Project cached coords to canvas pixels (fast: no trig) ─────────
     origin_tx_f = float(tx1)
     origin_ty_f = float(ty1)
     track_draw = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     td = ImageDraw.Draw(track_draw)
     points_px: list[tuple[int, int] | None] = []
 
-    for _, lat, lon in gps_track:
-        tx_f = lon_to_tile_x(lon, zoom) - origin_tx_f
-        ty_f = lat_to_tile_y(lat, zoom) - origin_ty_f
-        px_i = int(off_x + tx_f * TILE_SIZE * scale)
-        py_i = int(off_y + ty_f * TILE_SIZE * scale)
+    for tx_f, ty_f in zip(abs_tx_list, abs_ty_list):
+        px_i = int(off_x + (tx_f - origin_tx_f) * TILE_SIZE * scale)
+        py_i = int(off_y + (ty_f - origin_ty_f) * TILE_SIZE * scale)
         if -100 <= px_i <= width + 100 and -100 <= py_i <= height + 100:
             points_px.append((px_i, py_i))
         else:

@@ -2,15 +2,13 @@ README.md
 pyproject.toml
 src/__init__.py
 src/ffmpeg_pipeline.py
+src/map_renderer.py
 src/overlay_renderer.py
 src/telemetry_extract.py
 src/telemetry_gpmf.py
 src/gui/__init__.py
 src/gui/hud_tuner_app.py
 src/gui/layout_manager.py
-src/gui/preview_widget.py
-src/gui/property_editor.py
-src/gui/render_controller.py
 src/gui/telemetry_manager.py
 src/gui/widgets.py
 src/telem.egg-info/PKG-INFO

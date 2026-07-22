@@ -9,7 +9,7 @@ Every function is a pure transformation: parameters in, PIL.Image out.
 from __future__ import annotations
 
 import math
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 try:
     from PIL import Image, ImageDraw, ImageFilter, ImageFont
@@ -55,6 +55,22 @@ def parse_hex_color(hex_str: Any) -> Optional[tuple[int, int, int]]:
     except Exception:
         pass
     return None
+
+
+def _parse_marker_color(hex_color: str) -> tuple[int, int, int, int]:
+    """Convert '#RRGGBB' or '#RRGGBBAA' hex to RGBA tuple.
+    Falls back to white on failure."""
+    if not hex_color or not isinstance(hex_color, str):
+        return (255, 255, 255, 255)
+    s = hex_color.strip().lstrip("#")
+    try:
+        if len(s) == 6:
+            return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16), 255)
+        elif len(s) == 8:
+            return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16), int(s[6:8], 16))
+    except Exception:
+        pass
+    return (255, 255, 255, 255)
 
 
 def s(value: float, base: int) -> int:
@@ -743,6 +759,8 @@ def render_value_indicator(
                 gps_track, ci, map_w, map_h,
                 zoom=int(cfg.get("zoom", 16)),
                 map_style=cfg.get("map_style", "light_all"),
+                marker_radius=int(cfg.get("marker_size", 7)),
+                marker_color=_parse_marker_color(cfg.get("marker_color", "#FFFFFF")),
             )
             return map_img, s(cfg["x"], canvas_w), s(cfg["y"], canvas_h), None
         else:
@@ -1110,6 +1128,65 @@ def compose_overlay(
             rotated_paste(img, ct_res, ctx, cty, ct_rotation)
 
     return img
+
+
+# ── Shared chart data builder (used by both preview and render pipeline) ─────
+
+
+def build_chart_data(
+    layout: dict[str, Any],
+    get_samples_fn: Callable[[str], tuple[list, list, list]],
+    resolve_samples_fn: Callable[[str], list],
+) -> dict[str, list[float]]:
+    """Build chart history data for all chart-type indicators in a layout.
+
+    This function is shared by the preview (hud_tuner_app.py) and the
+    render pipeline (ffmpeg_pipeline.py) to eliminate code duplication
+    and ensure identical behaviour in both paths.
+
+    Args:
+        layout: HUD layout dict with ``indicators`` key.
+        get_samples_fn: ``(source) -> (speed, track, alt)`` triple.
+        resolve_samples_fn: ``(field_name) -> list`` for non-speed/alt/dist.
+
+    Returns:
+        ``{indicator_key: [values]}`` for every enabled chart indicator.
+    """
+    chart_data: dict[str, list[float]] = {}
+    for ind_key, ind_cfg in layout.get("indicators", {}).items():
+        if ind_cfg.get("form") != "chart" or not ind_cfg.get("enabled", True):
+            continue
+        src = ind_cfg.get("source", "gpmf")
+        if "speed" in ind_key:
+            spd_s, _, _ = get_samples_fn(src)
+            vals = [v for _, v in spd_s] if spd_s else []
+        elif "dist" in ind_key:
+            _, trk_s, _ = get_samples_fn(src)
+            vals = [v for _, v in trk_s] if trk_s else []
+        elif "alt" in ind_key:
+            _, _, alt_s = get_samples_fn(src)
+            vals = [v for _, v in alt_s] if alt_s else []
+        elif "power" in ind_key:
+            vals = [v for _, v in resolve_samples_fn("power")]
+        elif "hr" in ind_key:
+            vals = [v for _, v in resolve_samples_fn("hr")]
+        elif "cad" in ind_key:
+            vals = [v for _, v in resolve_samples_fn("cad")]
+        elif "atemp" in ind_key:
+            vals = [v for _, v in resolve_samples_fn("atemp")]
+        elif "battery" in ind_key:
+            vals = [v for _, v in resolve_samples_fn("battery")]
+        elif "iso" in ind_key:
+            vals = [v for _, v in resolve_samples_fn("iso")]
+        elif "exposure" in ind_key:
+            vals = [v for _, v in resolve_samples_fn("exposure")]
+        elif "temp" in ind_key and "atemp" not in ind_key:
+            vals = [v for _, v in resolve_samples_fn("temperature")]
+        else:
+            vals = []
+        if vals and len(vals) >= 2:
+            chart_data[ind_key] = vals
+    return chart_data
 
 
 def render_preview(

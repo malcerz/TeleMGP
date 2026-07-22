@@ -119,14 +119,28 @@ from src.telemetry_extract import (  # noqa: E402
     load_json_with_fallback,
 )
 
-APP_VERSION = "0.3"
+# GPMF binary parser – native Python extraction (no external ExifTool needed)
+try:
+    from telemetry_gpmf import gpmf_to_exiftool_json
+    _GPMF_AVAILABLE = True
+except ImportError:
+    _GPMF_AVAILABLE = False
+
+    def gpmf_to_exiftool_json(video_path, ffmpeg_exe='ffmpeg', ffprobe_exe='ffprobe'):  # noqa: E302
+        raise RuntimeError("GPMF module not available")
+
+
+APP_VERSION = "0.4.0"
 RESOLUTION_OPTIONS = ['source', '8k', '5.3k', '4k', '1080p', '720p', '480p']
 ENCODER_OPTIONS = ['nv', 'intel', 'cpu']
 GPS_OPTIONS = ['3d', '2d']
 ROTATION_OPTIONS = ['auto', '0', '90', '180', '270']
 SMOOTHING_WINDOW = 5
-# Lista dostępnych źródeł telemetrii dla wskaźników (łatwo rozszerzyć o 'fit')
-TELEMETRY_SOURCES = ['gpmf', 'gpx', 'fit']
+# Indicator schemas have been moved to src/gui/indicator_schemas.py
+from src.gui.indicator_schemas import (
+    TELEMETRY_SOURCES, get_common_schema, get_value_schema,
+    _FORM_FIELDS, _ALL_FORM_FIELDS, BUILTIN_FIELDS, TELEMETRY_TAGS,
+)
 
 
 # FONT_CACHE, font helpers and all overlay rendering functions
@@ -134,6 +148,7 @@ TELEMETRY_SOURCES = ['gpmf', 'gpx', 'fit']
 from src.overlay_renderer import (
     FONT_CACHE,
     s,
+    build_chart_data,
     load_font,
     load_font_cache_small,
     parse_hex_color,
@@ -145,97 +160,12 @@ from src.overlay_renderer import (
     compose_overlay,
     render_preview,
 )
+from src.map_renderer import clear_map_cache
 
 # generate_history_chart, load_font_cache_small and parse_hex_color
 # have been moved to src/overlay_renderer.py (imported above).
+# Indicator schemas imported from src.gui.indicator_schemas.py above.
 
-
-def get_value_schema():
-    return get_common_schema() + [
-        ("form", "choice", ["text", "gauge", "bar", "chart"], None, None),
-        ("font_size", "float", 0.005, 0.1, 0.001),
-        ("size", "float", 0.01, 0.5, 0.001),
-        ("thickness", "int", 1, 10, 1),
-        ("min_val", "float", 0.0, 1000.0, 1.0),
-        ("max_val", "float", 1.0, 10000.0, 1.0),
-        ("ticks", "int", 0, 20, 1),
-        ("show_value", "bool", None, None, None),
-        ("value_offset_x", "float", -0.3, 0.3, 0.001),
-        ("value_offset_y", "float", -0.3, 0.3, 0.001),
-        ("chart_color", "color", None, None, None),
-        ("fill_color", "color", None, None, None),
-        ("fill_alpha", "int", 0, 255, 5),
-    ]
-
-
-def get_common_schema():
-    return [
-        ("enabled", "bool", None, None, None),
-        ("label", "text", None, None, None),
-        ("x", "float", 0.0, 1.0, 0.001),
-        ("y", "float", 0.0, 1.0, 0.001),
-        ("rotation", "choice", [0, 90], None, None),
-    ]
-
-
-BUILTIN_FIELDS = {
-    "time_block": get_common_schema() + [
-        ("font_label", "float", 0.006, 0.03, 0.001),
-        ("font_date", "float", 0.008, 0.05, 0.001),
-        ("font_time", "float", 0.008, 0.05, 0.001),
-    ],
-    "speed_visual": get_value_schema() + [
-        ("source", "choice", TELEMETRY_SOURCES, None, None),
-    ],
-    "speed_text":   get_value_schema() + [
-        ("source", "choice", TELEMETRY_SOURCES, None, None),
-    ],
-    "dist_visual": get_value_schema() + [
-        ("source", "choice", TELEMETRY_SOURCES, None, None),
-        ("show_range_labels", "bool", None, None, None),
-        ("range_label_offset_x", "float", -0.2, 0.2, 0.001),
-        ("range_label_offset_y", "float", -0.2, 0.2, 0.001),
-        ("range_label_spread_x", "float", -0.2, 0.2, 0.001),
-    ],
-    "dist_text":    get_value_schema() + [
-        ("source", "choice", TELEMETRY_SOURCES, None, None),
-    ],
-    "alt_visual": get_value_schema() + [
-        ("source", "choice", TELEMETRY_SOURCES, None, None),
-        ("show_range_labels", "bool", None, None, None),
-        ("range_label_offset_x", "float", -0.2, 0.2, 0.001),
-        ("range_label_offset_y", "float", -0.2, 0.2, 0.001),
-        ("range_label_spread_x", "float", -0.2, 0.2, 0.001),
-    ],
-    "alt_text":    get_value_schema() + [
-        ("source", "choice", TELEMETRY_SOURCES, None, None),
-    ],
-    "iso_text":    get_value_schema(),
-    "exposure_text": get_value_schema(),
-    "temp_text":     get_value_schema(),
-    "power_text":    get_value_schema(),
-    "atemp_text":    get_value_schema(),
-    "hr_text":       get_value_schema(),
-    "cad_text":      get_value_schema(),
-    "battery_text":  get_value_schema(),
-    "track_map":     get_common_schema() + [
-        ("source", "choice", TELEMETRY_SOURCES, None, None),
-        ("size", "float", 0.05, 0.4, 0.001),
-        ("zoom", "int", 10, 20, 1),
-        ("map_style", "choice",
-            ["light_all", "light_nolabels", "dark_all", "dark_nolabels",
-             "voyager_all", "voyager_nolabels"],
-         None, None),
-    ],
-}
-
-TELEMETRY_TAGS = [
-    '-GPSDateTime', '-GPSSpeed', '-GPSSpeed3D',
-    '-SampleTime', '-TimeStamp',
-    '-GPSLatitude', '-GPSLongitude', '-GPSAltitude',
-    '-ISOSpeed', '-ISOSpeedRatings',
-    '-CameraTemperature', '-ExposureTimes',
-]
 
 def run(cmd):
     p = subprocess.run(cmd, capture_output=True, text=True)
@@ -532,6 +462,7 @@ def default_layout(video_width, video_height):
                 "enabled": False, "label": "Mapa", "x": 0.02, "y": 0.15, "rotation": 0, "form": "map",
                 "font_size": 0.012, "size": 0.18, "thickness": 1, "zoom": 16,
                 "source": "gpmf", "map_style": "light_all", "min_val": 0, "max_val": 1, "ticks": 0,
+                "marker_size": 7, "marker_color": "#FFFFFF",
             },
         },
         "smoothing": {"method": "moving_average", "strength": 3}
@@ -625,7 +556,6 @@ from src.ffmpeg_pipeline import (
     _get_source_samples,
     _resolve_cache_value,
     _resolve_cache_samples,
-    _build_chart_data_worker,
     render_overlay_job,
     generate_overlay_sequence,
     build_overlay_video,
@@ -648,7 +578,7 @@ class HudTunerApp:
         self.root = root
         self.root.title(f'HUD Tuner v{APP_VERSION}')
         self.root.geometry('1600x1050')
-        self.base_dir      = Path(__file__).resolve().parent
+        self.base_dir      = Path(__file__).resolve().parent.parent.parent  # główny folder programu (TeleMGP)
         self.video_paths_to_process = []
         self.font_path     = resolve_font_path('Arial')
         self.video_path    = None
@@ -749,7 +679,7 @@ class HudTunerApp:
         self.output_var          = tk.StringVar(value='output_h265.mp4')
         self.video_bitrate_var   = tk.StringVar(value='40M')
         self.video_info_var      = tk.StringVar(value='Brak pliku MP4')
-        self.meta_info_var       = tk.StringVar(value='Telemetry JSON: nie wygenerowano')
+        self.meta_info_var       = tk.StringVar(value='Telemetry JSON: nie wygenerowano (ExifTool)')
         self.loading_status      = tk.StringVar(value='')
         # Smoothing is always active with SMOOTHING_WINDOW = 5
 
@@ -1028,8 +958,10 @@ class HudTunerApp:
         # Convert to relative (0.0-1.0) layout coordinates
         cfg['x'] = max(0.0, min(1.0, orig_x / src_w))
         cfg['y'] = max(0.0, min(1.0, orig_y / src_h))
-        # Also update the property editor widget if visible
-        if key in self.property_widgets:
+        # Update property editor widgets (suppress callback cascade)
+        prev_suppress = getattr(self, '_suppress_builtin_change', False)
+        self._suppress_builtin_change = True
+        try:
             for field_name in ('x', 'y'):
                 w = self.property_widgets.get(field_name)
                 if w is not None:
@@ -1038,6 +970,8 @@ class HudTunerApp:
                         w.sync_entry()
                     except Exception:
                         pass
+        finally:
+            self._suppress_builtin_change = prev_suppress
         self.schedule_refresh(20)
 
     def _on_preview_mouse_up(self, event):
@@ -1215,6 +1149,15 @@ class HudTunerApp:
         if cfg is None:
             return
         schema = BUILTIN_FIELDS.get(name, get_value_schema())
+        # Filter by form: keep common fields + current-form fields + indicator-specific extras
+        form = cfg.get("form", "text")
+        allowed = _FORM_FIELDS.get(form, _FORM_FIELDS["text"])
+        schema = [
+            f for f in schema
+            if f[0] in ("enabled", "label", "x", "y", "rotation", "form")
+            or f[0] in allowed
+            or f[0] not in _ALL_FORM_FIELDS
+        ]
         for field_name, field_type, a, b, c in schema:
             if field_type == 'bool':
                 row = BoolRow(self.props_container, field_name, cfg.get(field_name, False), self.on_builtin_change)
@@ -1310,6 +1253,8 @@ class HudTunerApp:
         self.refresh()
 
     def on_builtin_change(self):
+        if getattr(self, '_suppress_builtin_change', False):
+            return
         # Sprawdź, która lista ma zaznaczenie - priorytet: custom_texts > indicator > gpx_ext
         ct_sel = self.custom_texts_list.curselection()
         if ct_sel:
@@ -1340,8 +1285,16 @@ class HudTunerApp:
         cfg = self.layout['indicators'].get(key)
         if cfg is None:
             return
+        # Clear map cache when zoom or map_style changes
+        old_zoom = cfg.get("zoom")
+        old_style = cfg.get("map_style")
         for field_name, widget in self.property_widgets.items():
             cfg[field_name] = widget.get()
+        # Synchronizuj layout_mgr po zmianie
+        if self.layout_mgr is not None:
+            self.layout_mgr.layout = self.layout
+        if key == "track_map" and (cfg.get("zoom") != old_zoom or cfg.get("map_style") != old_style):
+            clear_map_cache()
         self.schedule_refresh(60)
 
     # ── Telemetry delegation ────────────────────────────────────────────────
@@ -1552,14 +1505,25 @@ class HudTunerApp:
 
                     self.video_info_var.set(f'Video: {w}x{h} @ {fps:.2f}fps, {total_dur:.1f}s ({len(video_paths)} plik(i))')
 
+                    # Automatyczna nazwa pliku wyjściowego data-czas
+                    try:
+                        ts = getattr(self, 'start_dt_utc', None)
+                        if ts is None:
+                            ts = datetime.fromtimestamp(video_paths[0].stat().st_mtime)
+                        if ts.tzinfo is not None:
+                            ts = ts.astimezone(None)
+                        self.output_var.set(ts.strftime('%Y%m%d-%H%M.mp4'))
+                    except Exception:
+                        pass
+
                     if meta_candidate.exists():
                         self.meta_path = meta_candidate
-                        self.meta_info_var.set(f'Meta: {meta_candidate.name}')
+                        self.meta_info_var.set(f'Meta: {meta_candidate.name}  (z pliku)')
                         if not self.speed_samples and not self.track_samples:
                             self.render_stats.config(text='Meta JSON obecne, ale brak próbek. Odczyt...')
                             self.generate_meta_json(video_paths=video_paths, silent=True)
                     else:
-                        self.meta_info_var.set('Meta JSON: brak (wygeneruj exiftool)')
+                        self.meta_info_var.set('Meta JSON: brak — generuję ExifTool...')
                         self.generate_meta_json(video_paths=video_paths, silent=True)
 
                     # Automatyczny zapis ustawień (layoutu) – tylko gdy def_layout.json nie istnieje
@@ -1680,21 +1644,6 @@ class HudTunerApp:
         return []
 
     def _register_fit_fields(self, layout: Optional[dict] = None) -> None:
-        if layout is None:
-            layout = self.layout
-        if not self.telemetry or not self.fit_data:
-            return
-
-        new_keys = self.telemetry.register_fit_fields(
-            layout, BUILTIN_FIELDS, get_value_schema
-        )
-        if layout is self.layout:
-            self.fit_ext_fields = self.telemetry.fit_ext_fields = (
-                self.telemetry.fit_ext_fields + new_keys
-            )
-            self._rebuild_ext_list()
-
-    def _register_fit_fields(self, layout: Optional[dict] = None) -> None:
         """Create ``fit_*_text`` indicators for every FIT field.
 
         Only GPS-positional fields (speed/alt/track/lat/lon/timestamp) are
@@ -1768,6 +1717,15 @@ class HudTunerApp:
             cfg = self.layout["indicators"].get(key, {})
             label = cfg.get("label", key)
             self.ext_list.insert(tk.END, label)
+
+    def _rebuild_indicator_list(self) -> None:
+        """Rebuild the main indicator listbox from the current layout."""
+        if not hasattr(self, 'indicator_list'):
+            return
+        self.indicator_list.delete(0, tk.END)
+        for key in self.layout.get('indicators', {}):
+            if key not in GPX_EXT_FIELDS and not key.startswith("fit_"):
+                self.indicator_list.insert(tk.END, key)
 
     def refresh(self):
         self._refresh_after_id = None
@@ -1893,39 +1851,11 @@ class HudTunerApp:
                 except: fps_val = 30.0
                 total_frames = max(1, int(total_duration * fps_val))
                 current_position = current_ts / max(1.0, total_duration) if total_duration > 0 else 0.0
-                chart_data = {}
-                for ind_key, ind_cfg in self.layout.get('indicators', {}).items():
-                    if ind_cfg.get('form') == 'chart' and ind_cfg.get('enabled', True):
-                        src = ind_cfg.get('source', 'gpmf')
-                        if 'speed' in ind_key:
-                            spd_s, _, _ = self._get_samples_for_source(src)
-                            vals = [v for _, v in spd_s] if spd_s else []
-                        elif 'dist' in ind_key:
-                            _, trk_s, _ = self._get_samples_for_source(src)
-                            vals = [v for _, v in trk_s] if trk_s else []
-                        elif 'alt' in ind_key:
-                            _, _, alt_s = self._get_samples_for_source(src)
-                            vals = [v for _, v in alt_s] if alt_s else []
-                        elif 'power' in ind_key:
-                            vals = [v for _, v in self.resolve_source_samples("power")]
-                        elif 'hr' in ind_key:
-                            vals = [v for _, v in self.resolve_source_samples("hr")]
-                        elif 'cad' in ind_key:
-                            vals = [v for _, v in self.resolve_source_samples("cad")]
-                        elif 'atemp' in ind_key:
-                            vals = [v for _, v in self.resolve_source_samples("atemp")]
-                        elif 'battery' in ind_key:
-                            vals = [v for _, v in self.resolve_source_samples("battery")]
-                        elif 'iso' in ind_key:
-                            vals = [v for _, v in self.resolve_source_samples("iso")]
-                        elif 'exposure' in ind_key:
-                            vals = [v for _, v in self.resolve_source_samples("exposure")]
-                        elif 'temp' in ind_key and 'atemp' not in ind_key:
-                            vals = [v for _, v in self.resolve_source_samples("temperature")]
-                        else:
-                            vals = []
-                        if vals and len(vals) >= 2:
-                            chart_data[ind_key] = vals
+                chart_data = build_chart_data(
+                    self.layout,
+                    self._get_samples_for_source,
+                    self.resolve_source_samples,
+                )
 
                 # Build extra indicators from FIT fields
                 extra_indicators = {}
@@ -1980,13 +1910,13 @@ class HudTunerApp:
         if not self.video_path:
             messagebox.showerror('Błąd', 'Najpierw wybierz plik MP4.')
             return
+        def_layout = self.base_dir / 'def_layout.json'
+        with open(def_layout, 'w', encoding='utf-8') as f:
+            json.dump(self.layout, f, indent=2, ensure_ascii=False)
+        # Synchronizuj layout_mgr, aby był spójny ze stanem UI
         if self.layout_mgr is not None:
-            self.layout_mgr.save(self.base_dir / 'def_layout.json')
-        else:
-            def_layout = self.base_dir / 'def_layout.json'
-            with open(def_layout, 'w', encoding='utf-8') as f:
-                json.dump(self.layout, f, indent=2, ensure_ascii=False)
-        messagebox.showinfo('Zapisano', f'Konfiguracja zapisana:\n{self.base_dir / "def_layout.json"}')
+            self.layout_mgr.layout = self.layout
+        messagebox.showinfo('Zapisano', f'Konfiguracja zapisana:\n{def_layout}')
 
     def on_font_change(self, event=None):
         self.font_path = resolve_font_path(self.font_style_var.get())
@@ -2010,9 +1940,10 @@ class HudTunerApp:
                 self.layout = self.layout_mgr.load(path, w, h)
             else:
                 self.layout = normalize_layout(path, w, h)
-            self.build_property_editor_builtin()
-            # Rejestruj pola FIT dla odświeżenia listy Extension
+            # Rejestruj pola FIT przed budową edytora, aby nowe wskaźniki trafiły do UI
             self._register_fit_fields()
+            self._rebuild_indicator_list()
+            self.build_property_editor_builtin()
             self.refresh()
         except Exception as e:
             messagebox.showerror('Błąd', str(e))
@@ -2197,41 +2128,65 @@ class HudTunerApp:
         if not paths:
             return
 
-        self.render_stats.config(text="Generowanie telemetrii (ExifTool)...")
+        self.render_stats.config(text="Generowanie telemetrii...")
         self.render_progress.config(mode='indeterminate')
         self.render_progress.start()
 
         def worker():
+            method_used = "ExifTool"  # default fallback
             try:
-                print("➡ USING EXIFTOOL ONLY")
+                # ── Step 1: try GPMF binary parser (native Python, no external deps) ──
+                if _GPMF_AVAILABLE:
+                    try:
+                        ffmpeg_exe = self.ffmpeg_exe or find_executable(
+                            'ffmpeg', [str(self.base_dir / 'ffmpeg.exe'), 'ffmpeg.exe'])
+                        ffprobe_exe = self.ffprobe_exe or find_executable(
+                            str(self.ffprobe_path), [str(self.base_dir / 'ffprobe.exe'), 'ffprobe.exe'])
 
-                exiftool_exe = find_executable(
-                    str(self.exiftool_path),
-                    [str(self.base_dir / 'exiftool.exe'), 'exiftool.exe']
-                )
+                        if ffmpeg_exe and ffprobe_exe:
+                            print("➡ GPMF: extracting binary stream via ffmpeg...", flush=True)
+                            data = gpmf_to_exiftool_json(paths[0], ffmpeg_exe, ffprobe_exe)
+                            if data:
+                                method_used = "GPMF"
+                                print("✅ GPMF extraction succeeded", flush=True)
+                            else:
+                                raise RuntimeError("GPMF returned empty data")
+                        else:
+                            raise RuntimeError("ffmpeg/ffprobe not found for GPMF")
+                    except Exception as gpmf_err:
+                        # GPMF failed — fall through to ExifTool
+                        print(f"⚠ GPMF failed: {gpmf_err} — falling back to ExifTool", flush=True)
 
-                if not exiftool_exe:
-                    raise RuntimeError("❌ Nie znaleziono exiftool")
+                # ── Step 2: ExifTool fallback ──
+                if method_used == "ExifTool":
+                    print("➡ USING EXIFTOOL", flush=True)
 
-                self.exiftool_path = exiftool_exe
+                    exiftool_exe = find_executable(
+                        str(self.exiftool_path),
+                        [str(self.base_dir / 'exiftool.exe'), 'exiftool.exe']
+                    )
 
-                # ✅ WYWOŁANIE EXIFTOOL
-                cmd = [
-                    exiftool_exe,
-                    "-ee",
-                    "-j",
-                    "-G3",
-                    str(paths[0])
-                ]
+                    if not exiftool_exe:
+                        raise RuntimeError("❌ Nie znaleziono exiftool")
 
-                proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                    self.exiftool_path = exiftool_exe
 
-                if proc.returncode != 0:
-                    raise RuntimeError(proc.stderr or "ExifTool error")
+                    cmd = [
+                        exiftool_exe,
+                        "-ee",
+                        "-j",
+                        "-G3",
+                        str(paths[0])
+                    ]
 
-                data = json.loads(proc.stdout)
-                if not data:
-                    raise RuntimeError("❌ ExifTool zwrócił puste dane")
+                    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+                    if proc.returncode != 0:
+                        raise RuntimeError(proc.stderr or "ExifTool error")
+
+                    data = json.loads(proc.stdout)
+                    if not data:
+                        raise RuntimeError("❌ ExifTool zwrócił puste dane")
 
                 flat = data[0]
 
@@ -2241,7 +2196,7 @@ class HudTunerApp:
                 with open(json_path, "w", encoding="utf-8") as f:
                     json.dump(flat, f, indent=2, ensure_ascii=False)
 
-                print(f"✅ JSON zapisany: {json_path}")
+                print(f"✅ JSON zapisany: {json_path}  (method: {method_used})")
 
                 # ✅ WAŻNE – dalsza część programu
                 self.records = [flat]
@@ -2257,7 +2212,7 @@ class HudTunerApp:
                     self.render_stats.config(text="Gotowy")
 
                     self.meta_path = json_path
-                    self.meta_info_var.set(f'Meta: {json_path.name}')
+                    self.meta_info_var.set(f'Meta: {json_path.name}  ({method_used})')
 
                     self.build_property_editor_builtin()
                     # Register FIT fields before refresh so they render immediately
@@ -2270,7 +2225,7 @@ class HudTunerApp:
                     self.refresh()
 
                     if not silent:
-                        messagebox.showinfo('OK', f'JSON wygenerowany:\n{json_path}')
+                        messagebox.showinfo('OK', f'JSON wygenerowany ({method_used}):\n{json_path}')
 
                     if callback:
                         callback()
@@ -2399,6 +2354,18 @@ class HudTunerApp:
             if gpx_alt:
                 gpx_alt_samples = smooth_speed_samples(gpx_alt, "moving_average", SMOOTHING_WINDOW)
                 print("[GPX] render: gpx_alt_samples: " + str(len(gpx_alt_samples)), flush=True)
+            if gpx_power:
+                gpx_power_samples = gpx_power
+                print("[GPX] render: gpx_power_samples: " + str(len(gpx_power_samples)), flush=True)
+            if gpx_atemp:
+                gpx_atemp_samples = gpx_atemp
+                print("[GPX] render: gpx_atemp_samples: " + str(len(gpx_atemp_samples)), flush=True)
+            if gpx_hr:
+                gpx_hr_samples = gpx_hr
+                print("[GPX] render: gpx_hr_samples: " + str(len(gpx_hr_samples)), flush=True)
+            if gpx_cad:
+                gpx_cad_samples = gpx_cad
+                print("[GPX] render: gpx_cad_samples: " + str(len(gpx_cad_samples)), flush=True)
             if start_dt_utc is None and gpx_speed:
                 start_dt_utc = gpx_speed[0][0]
 

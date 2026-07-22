@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from src.overlay_renderer import compose_overlay
+from src.overlay_renderer import build_chart_data, compose_overlay
 from src.telemetry_extract import (
     interpolate_altitude,
     interpolate_distance,
@@ -203,6 +203,11 @@ def init_worker(
     WORKER_CACHE["update_rate_step"] = update_rate_step
     WORKER_CACHE["total_overlay_frames"] = total_overlay_frames or 1
 
+    # Precompute chart data for workers (identical for every frame)
+    WORKER_CACHE["_precomputed_chart_data"] = build_chart_data(
+        layout, _get_source_samples, _resolve_cache_samples,
+    )
+
 
 # ── Worker cache helpers ────────────────────────────────────────────────────
 
@@ -308,47 +313,6 @@ def _resolve_cache_samples(
                 break
 
     return samples
-
-
-# ── Chart data helper ───────────────────────────────────────────────────────
-
-
-def _build_chart_data_worker(layout: dict[str, Any]) -> dict[str, list[float]]:
-    """Build chart data from WORKER_CACHE for all indicators."""
-    chart_data: dict[str, list[float]] = {}
-    for ind_key, ind_cfg in layout.get("indicators", {}).items():
-        if ind_cfg.get("form") == "chart" and ind_cfg.get("enabled", True):
-            src = ind_cfg.get("source", "gpmf")
-            if "speed" in ind_key:
-                spd_s, _, _ = _get_source_samples(src)
-                vals = [v for _, v in spd_s] if spd_s else []
-            elif "dist" in ind_key:
-                _, trk_s, _ = _get_source_samples(src)
-                vals = [v for _, v in trk_s] if trk_s else []
-            elif "alt" in ind_key:
-                _, _, alt_s = _get_source_samples(src)
-                vals = [v for _, v in alt_s] if alt_s else []
-            elif "power" in ind_key:
-                vals = [v for _, v in _resolve_cache_samples("power")]
-            elif "hr" in ind_key:
-                vals = [v for _, v in _resolve_cache_samples("hr")]
-            elif "cad" in ind_key:
-                vals = [v for _, v in _resolve_cache_samples("cad")]
-            elif "atemp" in ind_key:
-                vals = [v for _, v in _resolve_cache_samples("atemp")]
-            elif "iso" in ind_key:
-                vals = [v for _, v in _resolve_cache_samples("iso")]
-            elif "exposure" in ind_key:
-                vals = [v for _, v in _resolve_cache_samples("exposure")]
-            elif "temp" in ind_key and "atemp" not in ind_key:
-                vals = [v for _, v in _resolve_cache_samples("temperature")]
-            elif "battery" in ind_key:
-                vals = [v for _, v in _resolve_cache_samples("battery")]
-            else:
-                vals = []
-            if vals and len(vals) >= 2:
-                chart_data[ind_key] = vals
-    return chart_data
 
 
 # ── Single overlay frame (disk-based) ───────────────────────────────────────
@@ -967,10 +931,6 @@ def stream_overlay_to_ffmpeg(
         speed_samples, track_samples, alt_samples,
         target_fps, update_rate_step, total_overlay_frames,
     )
-
-    # Precompute chart data once (identical for every frame — avoid per-frame rebuild)
-    precomputed_chart_data = _build_chart_data_worker(layout)
-    WORKER_CACHE["_precomputed_chart_data"] = precomputed_chart_data
 
     if cancel_event is not None and cancel_event.is_set():
         return 0

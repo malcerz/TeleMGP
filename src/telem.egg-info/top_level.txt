@@ -1,6 +1,7 @@
 __init__
 ffmpeg_pipeline
 gui
+map_renderer
 overlay_renderer
 telemetry_extract
 telemetry_gpmf

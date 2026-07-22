@@ -1,7 +1,7 @@
 {
   "version": 5,
   "global": {
-    "text_outline": 1
+    "text_outline": 3
   },
   "custom_texts": [],
   "indicators": {
@@ -28,7 +28,7 @@
       "min_val": 0,
       "max_val": 60,
       "ticks": 6,
-      "source": "fit"
+      "source": "gpmf"
     },
     "speed_text": {
       "enabled": true,
@@ -43,7 +43,7 @@
       "min_val": 0,
       "max_val": 100,
       "ticks": 0,
-      "source": "fit"
+      "source": "gpmf"
     },
     "dist_visual": {
       "enabled": true,
@@ -64,7 +64,7 @@
       "range_label_spread_x": 0.0,
       "value_offset_x": 0.0,
       "value_offset_y": 0.0,
-      "source": "fit"
+      "source": "gpmf"
     },
     "dist_text": {
       "enabled": true,
@@ -79,7 +79,7 @@
       "min_val": 0,
       "max_val": 100,
       "ticks": 0,
-      "source": "fit"
+      "source": "gpmf"
     },
     "alt_visual": {
       "enabled": true,
@@ -100,7 +100,7 @@
       "range_label_spread_x": 0.0,
       "value_offset_x": 0.0,
       "value_offset_y": 0.0,
-      "source": "fit"
+      "source": "gpmf"
     },
     "alt_text": {
       "enabled": true,
@@ -115,7 +115,7 @@
       "min_val": 0,
       "max_val": 1000,
       "ticks": 0,
-      "source": "fit"
+      "source": "gpmf"
     },
     "iso_text": {
       "enabled": true,
@@ -230,277 +230,23 @@
       "ticks": 0
     },
     "track_map": {
-      "enabled": true,
+      "enabled": false,
       "label": "Mapa",
-      "x": 0.369,
-      "y": 0.398,
+      "x": 0.02,
+      "y": 0.15,
       "rotation": 0,
       "form": "map",
       "font_size": 0.012,
       "size": 0.18,
       "thickness": 1,
-      "zoom": 20,
-      "source": "fit",
-      "map_style": "voyager_all",
+      "zoom": 16,
+      "source": "gpmf",
+      "map_style": "light_all",
       "min_val": 0,
       "max_val": 1,
-      "ticks": 0
-    },
-    "fit_K1_text": {
-      "enabled": true,
-      "label": "K1",
-      "x": 0.5,
-      "y": 0.08,
-      "rotation": 0,
-      "form": "text",
-      "font_size": 0.018,
-      "size": 0.1,
-      "thickness": 0.001,
-      "min_val": 0.0,
-      "max_val": 83.0,
       "ticks": 0,
-      "source": "fit",
-      "unit": ""
-    },
-    "fit_K2_text": {
-      "enabled": true,
-      "label": "K2",
-      "x": 0.5,
-      "y": 0.08,
-      "rotation": 0,
-      "form": "text",
-      "font_size": 0.018,
-      "size": 0.1,
-      "thickness": 0.001,
-      "min_val": 0.0,
-      "max_val": 83.0,
-      "ticks": 0,
-      "source": "fit",
-      "unit": ""
-    },
-    "fit_battery_pct_x100_text": {
-      "enabled": true,
-      "label": "Battery Pct X100",
-      "x": 0.5,
-      "y": 0.08,
-      "rotation": 0,
-      "form": "text",
-      "font_size": 0.018,
-      "size": 0.1,
-      "thickness": 0.001,
-      "min_val": 6500.0,
-      "max_val": 6700.0,
-      "ticks": 0,
-      "source": "fit",
-      "unit": ""
-    },
-    "fit_cadence_text": {
-      "enabled": true,
-      "label": "Cadence",
-      "x": 0.5,
-      "y": 0.08,
-      "rotation": 0,
-      "form": "text",
-      "font_size": 0.018,
-      "size": 0.1,
-      "thickness": 0.001,
-      "min_val": 0.0,
-      "max_val": 83.0,
-      "ticks": 0,
-      "source": "fit",
-      "unit": ""
-    },
-    "fit_curVpower_text": {
-      "enabled": true,
-      "label": "Curvpower",
-      "x": 0.5,
-      "y": 0.08,
-      "rotation": 0,
-      "form": "text",
-      "font_size": 0.018,
-      "size": 0.1,
-      "thickness": 0.001,
-      "min_val": 0.0,
-      "max_val": 424.0,
-      "ticks": 0,
-      "source": "fit",
-      "unit": ""
-    },
-    "fit_distance_text": {
-      "enabled": true,
-      "label": "Distance",
-      "x": 0.5,
-      "y": 0.08,
-      "rotation": 0,
-      "form": "text",
-      "font_size": 0.018,
-      "size": 0.1,
-      "thickness": 0.001,
-      "min_val": 0.0,
-      "max_val": 10139.56,
-      "ticks": 0,
-      "source": "fit",
-      "unit": ""
-    },
-    "fit_enhanced_altitude_text": {
-      "enabled": true,
-      "label": "Enhanced Altitude",
-      "x": 0.5,
-      "y": 0.08,
-      "rotation": 0,
-      "form": "text",
-      "font_size": 0.018,
-      "size": 0.1,
-      "thickness": 0.001,
-      "min_val": 6.0,
-      "max_val": 77.60000000000002,
-      "ticks": 0,
-      "source": "fit",
-      "unit": ""
-    },
-    "fit_enhanced_speed_text": {
-      "enabled": true,
-      "label": "Enhanced Speed",
-      "x": 0.5,
-      "y": 0.08,
-      "rotation": 0,
-      "form": "text",
-      "font_size": 0.018,
-      "size": 0.1,
-      "thickness": 0.001,
-      "min_val": 0.0,
-      "max_val": 11.449,
-      "ticks": 0,
-      "source": "fit",
-      "unit": ""
-    },
-    "fit_fractional_cadence_text": {
-      "enabled": true,
-      "label": "Fractional Cadence",
-      "x": 0.5,
-      "y": 0.08,
-      "rotation": 0,
-      "form": "text",
-      "font_size": 0.018,
-      "size": 0.1,
-      "thickness": 0.001,
-      "min_val": 0.0,
-      "max_val": 1.0,
-      "ticks": 0,
-      "source": "fit",
-      "unit": ""
-    },
-    "fit_gopro_battery_text": {
-      "enabled": true,
-      "label": "Gopro Battery",
-      "x": 0.5,
-      "y": 0.08,
-      "rotation": 0,
-      "form": "text",
-      "font_size": 0.018,
-      "size": 0.1,
-      "thickness": 0.001,
-      "min_val": 75.0,
-      "max_val": 100.0,
-      "ticks": 0,
-      "source": "fit",
-      "unit": ""
-    },
-    "fit_heart_rate_text": {
-      "enabled": true,
-      "label": "Heart Rate",
-      "x": 0.5,
-      "y": 0.08,
-      "rotation": 0,
-      "form": "text",
-      "font_size": 0.018,
-      "size": 0.1,
-      "thickness": 0.001,
-      "min_val": 79.0,
-      "max_val": 117.0,
-      "ticks": 0,
-      "source": "fit",
-      "unit": ""
-    },
-    "fit_passing_speed_text": {
-      "enabled": true,
-      "label": "Passing Speed",
-      "x": 0.5,
-      "y": 0.08,
-      "rotation": 0,
-      "form": "text",
-      "font_size": 0.018,
-      "size": 0.1,
-      "thickness": 0.001,
-      "min_val": 0.0,
-      "max_val": 1.0,
-      "ticks": 0,
-      "source": "fit",
-      "unit": ""
-    },
-    "fit_passing_speedabs_text": {
-      "enabled": true,
-      "label": "Passing Speedabs",
-      "x": 0.5,
-      "y": 0.08,
-      "rotation": 0,
-      "form": "text",
-      "font_size": 0.018,
-      "size": 0.1,
-      "thickness": 0.001,
-      "min_val": 0.0,
-      "max_val": 1.0,
-      "ticks": 0,
-      "source": "fit",
-      "unit": ""
-    },
-    "fit_radar_current_text": {
-      "enabled": true,
-      "label": "Radar Current",
-      "x": 0.5,
-      "y": 0.08,
-      "rotation": 0,
-      "form": "text",
-      "font_size": 0.018,
-      "size": 0.1,
-      "thickness": 0.001,
-      "min_val": 0.0,
-      "max_val": 1.0,
-      "ticks": 0,
-      "source": "fit",
-      "unit": ""
-    },
-    "fit_solar_text": {
-      "enabled": true,
-      "label": "Solar",
-      "x": 0.5,
-      "y": 0.08,
-      "rotation": 0,
-      "form": "text",
-      "font_size": 0.018,
-      "size": 0.1,
-      "thickness": 0.001,
-      "min_val": 0.0,
-      "max_val": 14.0,
-      "ticks": 0,
-      "source": "fit",
-      "unit": ""
-    },
-    "fit_temperature_text": {
-      "enabled": true,
-      "label": "Temperature",
-      "x": 0.5,
-      "y": 0.08,
-      "rotation": 0,
-      "form": "text",
-      "font_size": 0.018,
-      "size": 0.1,
-      "thickness": 0.001,
-      "min_val": 17.0,
-      "max_val": 26.0,
-      "ticks": 0,
-      "source": "fit",
-      "unit": ""
+      "marker_size": 7,
+      "marker_color": "#FFFFFF"
     }
   },
   "smoothing": {
