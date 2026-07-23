@@ -421,6 +421,7 @@ def render_value_indicator(
     history_data: Optional[list[float] | dict[str, Any]] = None,
     current_position: Optional[float] = None,
     gps_track: Optional[list[tuple[Any, float, float]]] = None,
+    supersample: int = 1,
 ) -> tuple[Optional[Image.Image], int, int, Optional[dict[str, Any]]]:
     """Render a single telemetry indicator (text, gauge, bar, or chart form).
 
@@ -437,6 +438,7 @@ def render_value_indicator(
         max_distance_m: Max distance for bar range labels.
         history_data: Chart data (list of floats or dict with 'values' key).
         current_position: 0.0-1.0 position for chart cursor.
+        supersample: Supersampling factor (default 1).
 
     Returns:
         (overlay_img, px_x, px_y, extra_dict) or (None, 0, 0, None) if disabled.
@@ -466,6 +468,7 @@ def render_value_indicator(
         _thickness_rel = _thickness_raw
     thickness = max(1, s(_thickness_rel, min_dim))
     size_px = s(cfg.get("size", 0.1), min_dim if form == "gauge" else canvas_w)
+    ss = max(1, supersample)
 
     if form == "text":
         v_str = formatted_val if formatted_val else f"{value:.1f} {unit}"
@@ -486,8 +489,9 @@ def render_value_indicator(
         return tmp.crop(bbox), s(cfg["x"], canvas_w), s(cfg["y"], canvas_h), None
 
     elif form == "bar":
-        w, h = size_px, max(24, thickness * 6)
-        img = Image.new("RGBA", (w + 40, h + 30), (0, 0, 0, 0))
+        # Apply supersampling to bar dimensions
+        w, h = int(size_px * ss), int(max(24, thickness * 6) * ss)
+        img = Image.new("RGBA", (w + 40 * ss, h + 30 * ss), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
 
         v_str = f"{value:.1f} {unit}"
@@ -495,7 +499,7 @@ def render_value_indicator(
 
         if label:
             draw.text(
-                (20, 0),
+                (20 * ss, 0),
                 label,
                 font=font,
                 fill=(210, 210, 210, 255),
@@ -503,17 +507,17 @@ def render_value_indicator(
                 stroke_fill=(0, 0, 0, 255),
             )
 
-        by = h - thickness - 5
-        x1, x2 = 20, w + 20
-        draw.line((x1, by, x2, by), fill=(160, 160, 160, 180), width=thickness)
+        by = h - thickness - 5 * ss
+        x1, x2 = 20 * ss, w + 20 * ss
+        draw.line((x1, by, x2, by), fill=(160, 160, 160, 180), width=thickness * ss)
 
         if ticks > 1:
             for i in range(ticks + 1):
                 xt = x1 + (w * i / ticks)
                 draw.line(
-                    (xt, by - thickness, xt, by + thickness),
+                    (xt, by - thickness * ss, xt, by + thickness * ss),
                     fill=(245, 245, 245, 220),
-                    width=max(1, thickness // 4),
+                    width=max(1, thickness // 4 * ss),
                 )
 
         frac = max(0, min(1, (value - val_min) / (val_max - val_min))) if val_max > val_min else 0
@@ -521,139 +525,304 @@ def render_value_indicator(
         dot_y = by
 
         draw.ellipse(
-            (dot_x - thickness, dot_y - thickness, dot_x + thickness, dot_y + thickness),
+            (dot_x - thickness * ss, dot_y - thickness * ss, dot_x + thickness * ss, dot_y + thickness * ss),
             fill=(255, 50, 50, 255),
             outline=(255, 255, 255, 255),
         )
         extra = {
             "show_value": show_value,
             "value_text": v_str,
-            "dot_x": dot_x,
-            "dot_y": dot_y,
-            "bar_w": w,
-            "bar_h": h,
-            "x1": x1,
-            "x2": x2,
-            "by": by,
-            "show_range_labels": key == "dist_visual" and cfg.get("show_range_labels", False),
-            "left_text": "0 km",
-            "right_text": f"{max_distance_m / 1000.0:.1f} km" if max_distance_m is not None else "",
+            "dot_x": dot_x / ss,
+            "dot_y": dot_y / ss,
+            "bar_w": w / ss,
+            "bar_h": h / ss,
+            "x1": x1 / ss,
+            "x2": x2 / ss,
+            "by": by / ss,
+            "show_range_labels": cfg.get("show_range_labels", False),
+            "left_text": f"{cfg.get('min_val', 0):.0f}",
+            "right_text": f"{cfg.get('max_val', 100):.0f}",
         }
+        # Downscale to original size
+        if ss > 1:
+            img = img.resize((int(img.width / ss), int(img.height / ss)), Image.LANCZOS)
         return img, s(cfg["x"], canvas_w), s(cfg["y"], canvas_h), extra
 
     elif form == "gauge":
+        # Force minimum 3× supersampling – PIL ImageDraw has no native AA,
+        # so we must render larger and downscale for smooth edges.
+        ss = max(3, ss)
+
+        gauge_fs = max(8, fs * ss)
+        gauge_font = load_font(font_path, gauge_fs)
+        gauge_outline = outline * ss
+
+        radius = size_px * ss
+        img_size = int(radius * 2.4)
+
+        out_gauge_size = int(size_px * 2.4)
+
+        img = Image.new("RGBA", (img_size, img_size), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+
+        cx = cy = img_size // 2
+
+        start_deg, end_deg = 180, 360
+
         display_min = 0
         display_max = math.ceil(val_max / 10.0) * 10 if val_max > 0 else 10
+
         major_ticks_count = int(display_max / 10)
         if major_ticks_count < 1:
             major_ticks_count = 1
-        sub_ticks_count = 10
+
+        sub_ticks_count = max(1, ticks) if ticks > 0 else 10
         total_ticks = major_ticks_count * sub_ticks_count
 
-        radius = size_px
-        img_size = int(radius * 2.4)
-        img = Image.new("RGBA", (img_size, img_size), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(img)
-        cx = cy = img_size // 2
-        start_deg, end_deg = 180, 360
+        # ---------------------------------------------------------
+        # PODZIAŁKA
+        # ---------------------------------------------------------
 
         for i in range(total_ticks + 1):
-            a = math.radians(start_deg + (end_deg - start_deg) * i / total_ticks)
+            a = math.radians(
+                start_deg + (end_deg - start_deg) * i / total_ticks
+            )
+
             cos_a = math.cos(a)
             sin_a = math.sin(a)
 
             if i % sub_ticks_count == 0:
-                tick_len = thickness
-                tick_width = max(3, int(thickness // 3))
-                tick_val = display_min + (display_max - display_min) * (i / total_ticks)
+                tick_len = thickness * ss
+                tick_width = max(3 * ss, int(thickness // 3) * ss)
+
+                tick_val = (
+                    display_min
+                    + (display_max - display_min) * (i / total_ticks)
+                )
+
                 txt_tick = f"{tick_val:.0f}"
+
                 text_radius = radius - tick_len - (radius * 0.20)
+
                 tx = cx + cos_a * text_radius
                 ty = cy + sin_a * text_radius
+
                 draw.text(
                     (tx, ty),
                     txt_tick,
-                    font=font,
+                    font=gauge_font,
                     fill=(255, 255, 255, 240),
-                    stroke_width=1,
+                    stroke_width=ss,
                     stroke_fill=(0, 0, 0, 255),
                     anchor="mm",
                 )
+
             elif i % (sub_ticks_count // 2) == 0:
-                tick_len = thickness * 0.7
-                tick_width = max(2, int(thickness // 4))
+                tick_len = thickness * 0.7 * ss
+                tick_width = max(2 * ss, int(thickness // 4) * ss)
+
             else:
-                tick_len = thickness * 0.4
-                tick_width = max(1, int(thickness // 6))
+                tick_len = thickness * 0.4 * ss
+                tick_width = max(1 * ss, int(thickness // 6) * ss)
 
             r_out = radius
             r_in = radius - tick_len
-            draw.line(
-                (
-                    cx + cos_a * r_in,
-                    cy + sin_a * r_in,
-                    cx + cos_a * r_out,
-                    cy + sin_a * r_out,
-                ),
+
+            x1 = cx + cos_a * r_in
+            y1 = cy + sin_a * r_in
+
+            x2 = cx + cos_a * r_out
+            y2 = cy + sin_a * r_out
+
+            # wektor prostopadły
+            px = -sin_a
+            py = cos_a
+
+            hw = tick_width / 2
+
+            draw.polygon(
+                [
+                    (x1 + px * hw, y1 + py * hw),
+                    (x1 - px * hw, y1 - py * hw),
+                    (x2 - px * hw, y2 - py * hw),
+                    (x2 + px * hw, y2 + py * hw),
+                ],
                 fill=(240, 240, 240, 255),
-                width=tick_width,
             )
 
+        # ---------------------------------------------------------
+        # WSKAZÓWKA
+        # ---------------------------------------------------------
+
         frac = (
-            max(0, min(1, (value - display_min) / (display_max - display_min)))
+            max(
+                0,
+                min(
+                    1,
+                    (value - display_min)
+                    / (display_max - display_min),
+                ),
+            )
             if display_max > display_min
             else 0
         )
-        ang = math.radians(start_deg + (end_deg - start_deg) * frac)
 
-        needle_r_out = radius + max(2, int(radius * 0.05))
-        needle_r_in = radius - thickness - (radius * 0.40)
-
-        draw.line(
-            (
-                cx + math.cos(ang) * needle_r_in,
-                cy + math.sin(ang) * needle_r_in,
-                cx + math.cos(ang) * needle_r_out,
-                cy + math.sin(ang) * needle_r_out,
-            ),
-            fill=(220, 50, 50, 255),
-            width=max(4, int(thickness // 2)),
+        ang = math.radians(
+            start_deg + (end_deg - start_deg) * frac
         )
+
+        # Dłuższa wskazówka
+        needle_r_out = radius + max(
+            4 * ss,
+            int(radius * 0.10)
+        )
+
+        # Początek bliżej środka
+        needle_r_in = radius * 0.05
+        needle_width = max(2 * ss, int(thickness * 0.18 * ss))
+
+
+        # Cieńsza
+        needle_width = max(
+            3 * ss,
+            int(thickness * 0.25 * ss)
+        )
+
+        px = -math.sin(ang)
+        py = math.cos(ang)
+
+        tip_x = cx + math.cos(ang) * needle_r_out
+        tip_y = cy + math.sin(ang) * needle_r_out
+
+        base_x = cx + math.cos(ang) * needle_r_in
+        base_y = cy + math.sin(ang) * needle_r_in
+
+        draw.polygon(
+            [
+                (
+                    base_x + px * needle_width / 2,
+                    base_y + py * needle_width / 2,
+                ),
+                (
+                    base_x - px * needle_width / 2,
+                    base_y - py * needle_width / 2,
+                ),
+                (tip_x, tip_y),
+            ],
+            fill=(220, 50, 50, 255),
+        )
+
+        # Oś wskazówki
+       
+        # ---------------------------------------------------------
+        # TEKST ŚRODKOWY
+        # ---------------------------------------------------------
 
         if key == "speed_visual":
             if label:
-                tw = draw.textbbox((0, 0), label, font=font)[2]
-                draw.text(
-                    (cx - tw // 2, cy + radius // 2),
+                tw = draw.textbbox(
+                    (0, 0),
                     label,
-                    font=font,
+                    font=gauge_font,
+                )[2]
+
+                draw.text(
+                    (cx - tw // 2, cy + int(radius // 2)),
+                    label,
+                    font=gauge_font,
                     fill=(255, 255, 255, 255),
-                    stroke_width=outline,
+                    stroke_width=gauge_outline,
                     stroke_fill=(0, 0, 0, 255),
                 )
         else:
             txt_main = f"{value:.1f}"
-            tw = draw.textbbox((0, 0), txt_main, font=font)[2]
-            draw.text(
-                (cx - tw // 2, cy + radius // 2),
+
+            tw = draw.textbbox(
+                (0, 0),
                 txt_main,
-                font=font,
+                font=gauge_font,
+            )[2]
+
+            draw.text(
+                (cx - tw // 2, cy + int(radius // 2)),
+                txt_main,
+                font=gauge_font,
                 fill=(255, 255, 255, 255),
-                stroke_width=outline,
+                stroke_width=gauge_outline,
                 stroke_fill=(0, 0, 0, 255),
             )
 
-        # Drop shadow
-        shadow_offset = max(2, int(radius * 0.025))
-        shadow = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        shadow.paste(img, (shadow_offset, shadow_offset))
-        alpha = shadow.split()[3].point(lambda x: int(x * 0.35))
-        alpha = alpha.filter(ImageFilter.GaussianBlur(radius=max(1, int(radius * 0.035))))
-        shadow_rgba = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        shadow_rgba.putalpha(alpha)
-        img = Image.alpha_composite(shadow_rgba, img)
+        # ---------------------------------------------------------
+        # SHADOW
+        # ---------------------------------------------------------
 
-        return img, s(cfg["x"], canvas_w), s(cfg["y"], canvas_h), None
+        shadow_offset = max(
+            2 * ss,
+            int(radius * 0.025)
+        )
+
+        shadow = Image.new(
+            "RGBA",
+            img.size,
+            (0, 0, 0, 0),
+        )
+
+        shadow.paste(
+            img,
+            (shadow_offset, shadow_offset),
+        )
+
+        alpha = shadow.split()[3].point(
+            lambda x: int(x * 0.35)
+        )
+
+        alpha = alpha.filter(
+            ImageFilter.GaussianBlur(
+                radius=max(
+                    ss,
+                    int(radius * 0.035),
+                )
+            )
+        )
+
+        shadow_rgba = Image.new(
+            "RGBA",
+            img.size,
+            (0, 0, 0, 0),
+        )
+
+        shadow_rgba.putalpha(alpha)
+
+        img = Image.alpha_composite(
+            shadow_rgba,
+            img,
+        )
+
+        # ---------------------------------------------------------
+        # FINAL ANTIALIASING
+        # ---------------------------------------------------------
+
+        if ss > 1:
+            img = img.filter(
+                ImageFilter.GaussianBlur(
+                    radius=0.5 * ss
+                )
+            )
+
+            img = img.resize(
+                (
+                    out_gauge_size,
+                    out_gauge_size,
+                ),
+                Image.LANCZOS,
+            )
+
+        return (
+            img,
+            s(cfg["x"], canvas_w),
+            s(cfg["y"], canvas_h),
+            None,
+        )
 
     elif form == "chart":
         time_labels = None
@@ -741,6 +910,200 @@ def render_value_indicator(
         )
 
         return final_img, s(cfg["x"], canvas_w), s(cfg["y"], canvas_h), None
+
+    elif form == "segment_bar":
+        # Use existing supersampling factor; ensure at least 1×
+        ss = max(1, ss)
+
+        bar_w = int(cfg.get("width", 250)) * ss
+        bar_h = int(cfg.get("height", 50)) * ss
+
+        segments = max(1, int(cfg.get("segments", 20)))
+        gap = int(cfg.get("segment_gap", 2)) * ss
+        radius_seg = int(cfg.get("segment_radius", 2)) * ss
+
+        # Clamp to prevent degenerate geometry
+        total_gap = (segments - 1) * gap
+        if total_gap >= bar_w:
+            gap = 0
+            total_gap = 0
+
+        min_value = float(cfg.get("min_val", 0))
+        max_value = float(cfg.get("max_val", 100))
+
+        show_value = bool(cfg.get("show_value", True))
+        show_min = bool(cfg.get("show_min", False))
+        show_max = bool(cfg.get("show_max", False))
+        show_label = bool(cfg.get("show_label", False))
+        decimals = int(cfg.get("decimals", 0))
+
+        label_text = str(label)
+        direction = cfg.get("direction", "horizontal")
+        grow_height = bool(cfg.get("grow_height", True))
+        inactive_alpha = int(cfg.get("inactive_alpha", 100))
+
+        gradient = cfg.get("gradient", ["#00FF00", "#FFFF00", "#FF0000"])
+        inactive_color = parse_hex_color(cfg.get("inactive_color", "#404040"))
+        if inactive_color is None:
+            inactive_color = (64, 64, 64)
+
+        img = Image.new("RGBA", (bar_w, bar_h), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+
+        # --- gradient helpers ---
+        def lerp_color(a, b, t):
+            return a + (b - a) * t
+
+        def gradient_color(position):
+            if len(gradient) == 1:
+                c = parse_hex_color(gradient[0])
+                return c if c else (255, 255, 255)
+            pos = max(0.0, min(1.0, position))
+            step = 1.0 / (len(gradient) - 1)
+            idx = min(len(gradient) - 2, int(pos / step))
+            local_t = (pos - idx * step) / step
+            c1 = parse_hex_color(gradient[idx])
+            c2 = parse_hex_color(gradient[idx + 1])
+            if c1 is None:
+                c1 = (255, 255, 255)
+            if c2 is None:
+                c2 = (255, 255, 255)
+            return (int(lerp_color(c1[0], c2[0], local_t)),
+                    int(lerp_color(c1[1], c2[1], local_t)),
+                    int(lerp_color(c1[2], c2[2], local_t)))
+
+        # --- fill fraction ---
+        frac = 0
+        if max_value > min_value:
+            frac = max(0, min(1, (value - min_value) / (max_value - min_value)))
+        active_segments = round(frac * segments)
+
+        # --- text labels (compute before geometry to reserve space) ---
+        seg_fs = max(8, int(bar_h * 0.22))
+        label_top_space = seg_fs + 4 if (show_label and label_text) else 0
+        seg_area_h = bar_h - label_top_space  # usable height for segments
+
+        # --- geometry ---
+        if direction == "horizontal":
+            seg_w = (bar_w - total_gap) / segments
+            for i in range(segments):
+                seg_frac = i / (segments - 1) if segments > 1 else 0
+                h_mult = 0.35 + seg_frac * 0.65 if grow_height else 1.0
+                seg_height = max(1, int(seg_area_h * h_mult))
+                x1 = int(i * (seg_w + gap))
+                x2 = int(x1 + seg_w)
+                y1 = bar_h - seg_height
+                y2 = bar_h
+                if i < active_segments:
+                    rgb = gradient_color(seg_frac)
+                    fill = (rgb[0], rgb[1], rgb[2], 255)
+                else:
+                    fill = (inactive_color[0], inactive_color[1], inactive_color[2], inactive_alpha)
+                draw.rounded_rectangle((x1, y1, x2, y2), radius=radius_seg, fill=fill)
+        else:
+            seg_h = (bar_h - label_top_space - total_gap) / segments
+            for i in range(segments):
+                seg_frac = i / (segments - 1) if segments > 1 else 0
+                w_mult = 0.35 + seg_frac * 0.65 if grow_height else 1.0
+                seg_width = max(1, int(bar_w * w_mult))
+                y2 = bar_h - int(i * (seg_h + gap))
+                y1 = int(y2 - seg_h)
+                x1 = 0
+                x2 = seg_width
+                if i < active_segments:
+                    rgb = gradient_color(seg_frac)
+                    fill = (rgb[0], rgb[1], rgb[2], 255)
+                else:
+                    fill = (inactive_color[0], inactive_color[1], inactive_color[2], inactive_alpha)
+                draw.rounded_rectangle((x1, y1, x2, y2), radius=radius_seg, fill=fill)
+
+        # --- text labels ---
+        if show_label or show_value or show_min or show_max:
+            try:
+                seg_font = load_font(font_path, seg_fs)
+            except Exception:
+                seg_font = font
+            seg_outline = max(1, seg_fs // 12)
+            txt_color = (255, 255, 255, 255)
+            dim_color = (180, 180, 180, 255)
+
+        y_bottom = bar_h - seg_fs - 2
+        x_margin = 4
+
+        if show_label and label_text:
+            tw = draw.textbbox((0, 0), label_text, font=seg_font)[2]
+            draw.text(
+                ((bar_w - tw) // 2, 2),
+                label_text,
+                font=seg_font,
+                fill=txt_color,
+                stroke_width=seg_outline,
+                stroke_fill=(0, 0, 0, 255),
+            )
+
+        min_str = f"{min_value:.{decimals}f}" if decimals else f"{min_value:.0f}"
+        max_str = f"{max_value:.{decimals}f}" if decimals else f"{max_value:.0f}"
+        val_str = f"{value:.{decimals}f}" if decimals else f"{value:.0f}"
+
+        if show_min:
+            draw.text(
+                (x_margin, y_bottom),
+                min_str,
+                font=seg_font,
+                fill=dim_color,
+                stroke_width=seg_outline,
+                stroke_fill=(0, 0, 0, 255),
+            )
+
+        if show_max:
+            tw_max = draw.textbbox((0, 0), max_str, font=seg_font)[2]
+            draw.text(
+                (bar_w - tw_max - x_margin, y_bottom),
+                max_str,
+                font=seg_font,
+                fill=dim_color,
+                stroke_width=seg_outline,
+                stroke_fill=(0, 0, 0, 255),
+            )
+
+        if show_value:
+            tw_val = draw.textbbox((0, 0), val_str, font=seg_font)[2]
+            # Place between min and max, or at bottom-right if max is off
+            if show_min and show_max:
+                tw_min = draw.textbbox((0, 0), min_str, font=seg_font)[2]
+                tw_max = draw.textbbox((0, 0), max_str, font=seg_font)[2]
+                center = bar_w // 2
+                value_x = max(x_margin + tw_min + 4, center - tw_val // 2)
+                value_x = min(value_x, bar_w - tw_max - tw_val - x_margin - 4)
+            elif show_max:
+                tw_max = draw.textbbox((0, 0), max_str, font=seg_font)[2]
+                value_x = bar_w - tw_max - tw_val - x_margin - 4
+            else:
+                value_x = bar_w - tw_val - x_margin
+            draw.text(
+                (max(x_margin, value_x), y_bottom),
+                val_str,
+                font=seg_font,
+                fill=txt_color,
+                stroke_width=seg_outline,
+                stroke_fill=(0, 0, 0, 255),
+            )
+
+        # --- shadow ---
+        shadow = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        shadow.paste(img, (2 * ss, 2 * ss))
+        alpha = shadow.split()[3].point(lambda v: int(v * 0.35))
+        alpha = alpha.filter(ImageFilter.GaussianBlur(radius=2 * ss))
+        shadow_img = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        shadow_img.putalpha(alpha)
+        img = Image.alpha_composite(shadow_img, img)
+
+        # --- antialiasing ---
+        if ss > 1:
+            img = img.filter(ImageFilter.GaussianBlur(radius=0.35 * ss))
+            img = img.resize((int(bar_w / ss), int(bar_h / ss)), Image.LANCZOS)
+
+        return img, s(cfg["x"], canvas_w), s(cfg["y"], canvas_h), None
 
     elif form == "map":
         if gps_track and len(gps_track) >= 2:
@@ -934,6 +1297,9 @@ def compose_overlay(
         if chart_data and key in chart_data:
             chart_vals = chart_data[key]
 
+        # Determine supersampling factor (global or per-indicator)
+        global_ss = layout.get("global", {}).get("antialiasing", 1)
+        ss = current_cfg.get("supersample", global_ss)
         res, rx, ry, extra = render_value_indicator(
             canvas_w,
             canvas_h,
@@ -949,6 +1315,7 @@ def compose_overlay(
             history_data=chart_vals,
             current_position=current_position,
             gps_track=gps_track,
+            supersample=ss,
         )
 
         if res:
@@ -1017,21 +1384,9 @@ def compose_overlay(
                     stroke_fill=(0, 0, 0, 255),
                 )
 
-            if key in ("dist_visual", "alt_visual") and cfg.get("show_range_labels", False):
-                left_text = (
-                    f"{int(cfg.get('min_val', 0))} m"
-                    if key == "alt_visual"
-                    else "0 km"
-                )
-                right_text = (
-                    f"{int(cfg.get('max_val', 500))} m"
-                    if key == "alt_visual"
-                    else (
-                        f"{max_distance_m / 1000.0:.1f} km"
-                        if max_distance_m is not None
-                        else ""
-                    )
-                )
+            if extra and extra.get("show_range_labels"):
+                left_text = extra.get("left_text", f"{cfg.get('min_val', 0):.0f}")
+                right_text = extra.get("right_text", f"{cfg.get('max_val', 100):.0f}")
                 rox = int(round(cfg.get("range_label_offset_x", 0.0) * canvas_w))
                 roy = int(round(cfg.get("range_label_offset_y", 0.0) * canvas_h))
                 rspreadx = int(round(cfg.get("range_label_spread_x", 0.0) * canvas_w))
@@ -1047,7 +1402,7 @@ def compose_overlay(
                     right_w = right_h = 0
 
                 if rotation == 90:
-                    left_x = int(rx - left_w - 8 + rox)
+                    left_x = int(rx - res.width // 2 + extra["x1"] - left_w - 8 + rox)
                     left_y = int(ry + res.width - left_h / 2 + roy)
                     draw.text(
                         (left_x, left_y),
@@ -1058,7 +1413,7 @@ def compose_overlay(
                         stroke_fill=(0, 0, 0, 255),
                     )
                     if right_text:
-                        right_x = int(rx - right_w - 8 + rox)
+                        right_x = int(rx - res.width // 2 + extra["x2"] + rox)
                         right_y = int(ry - right_h / 2 + roy - rspreadx)
                         draw.text(
                             (right_x, right_y),
@@ -1070,8 +1425,9 @@ def compose_overlay(
                         )
                 else:
                     left_y = int(ry + extra["by"] + 4 + roy)
+                    left_x = int(rx - res.width // 2 + extra["x1"] + rox)
                     draw.text(
-                        (int(rx + extra["x1"] + rox), left_y),
+                        (left_x, left_y),
                         left_text,
                         font=font,
                         fill=(220, 220, 220, 255),
@@ -1079,8 +1435,9 @@ def compose_overlay(
                         stroke_fill=(0, 0, 0, 255),
                     )
                     if right_text:
+                        right_x = int(rx - res.width // 2 + extra["x2"] - right_w + rox + rspreadx)
                         draw.text(
-                            (int(rx + extra["x2"] - right_w + rox + rspreadx), left_y),
+                            (right_x, left_y),
                             right_text,
                             font=font,
                             fill=(220, 220, 220, 255),

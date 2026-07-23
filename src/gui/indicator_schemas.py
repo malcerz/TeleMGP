@@ -36,7 +36,7 @@ def get_common_schema() -> list[tuple]:
 def get_value_schema() -> list[tuple]:
     """Return the schema fields for value indicators (text/gauge/bar/chart)."""
     return get_common_schema() + [
-        ("form", "choice", ["text", "gauge", "bar", "chart"], None, None),
+        ("form", "choice", ["text", "gauge", "bar", "chart", "segment_bar"], None, None),
         ("font_size", "float", 0.005, 0.1, 0.001),
         ("size", "float", 0.01, 0.5, 0.001),
         ("thickness", "int", 1, 10, 1),
@@ -54,13 +54,42 @@ def get_value_schema() -> list[tuple]:
 
 # ── Per-form field filtering ─────────────────────────────────────────────────
 
+def get_segment_bar_schema() -> list[tuple]:
+    """Return the schema fields for segment_bar indicators."""
+    return get_common_schema() + [
+        ("form", "choice", ["text", "gauge", "bar", "chart", "segment_bar"], None, None),
+        ("source", "choice", TELEMETRY_SOURCES, None, None),
+        ("width", "int", 250, 800, 10),
+        ("height", "int", 50, 300, 5),
+        ("segments", "int", 20, 100, 1),
+        ("segment_gap", "int", 2, 20, 1),
+        ("segment_radius", "int", 2, 20, 1),
+        ("min_val", "float", 0.0, 1000.0, 1.0),
+        ("max_val", "float", 100.0, 10000.0, 1.0),
+        ("show_value", "bool", None, None, None),
+        ("show_min", "bool", None, None, None),
+        ("show_max", "bool", None, None, None),
+        ("show_label", "bool", None, None, None),
+        ("decimals", "int", 0, 3, 1),
+        ("direction", "choice", ["horizontal", "vertical"], None, None),
+        ("grow_height", "bool", None, None, None),
+        ("inactive_alpha", "int", 100, 255, 5),
+        ("inactive_color", "color", None, None, None),
+    ]
+
+
 _FORM_FIELDS: dict[str, set[str]] = {
     "text":  {"font_size", "size", "show_value", "value_offset_x", "value_offset_y"},
     "gauge": {"font_size", "size", "thickness", "min_val", "max_val", "ticks",
-              "show_value", "value_offset_x", "value_offset_y", "fill_color", "fill_alpha"},
+              "show_value", "value_offset_x", "value_offset_y"},
     "bar":   {"font_size", "size", "thickness", "min_val", "max_val", "ticks",
-              "show_value", "value_offset_x", "value_offset_y", "fill_color", "fill_alpha"},
-    "chart": {"font_size", "size", "chart_color"},
+              "show_value", "value_offset_x", "value_offset_y",
+              "show_range_labels", "range_label_offset_x", "range_label_offset_y", "range_label_spread_x"},
+    "chart": {"font_size", "size", "thickness", "chart_color", "fill_color", "fill_alpha"},
+    "segment_bar": {"width", "height", "segments", "segment_gap", "segment_radius",
+                    "min_val", "max_val", "show_value", "show_min", "show_max",
+                    "show_label", "decimals", "direction", "grow_height",
+                    "inactive_alpha", "inactive_color", "source"},
 }
 
 _ALL_FORM_FIELDS: set[str] = set().union(*_FORM_FIELDS.values()).union({"form"})

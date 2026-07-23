@@ -130,7 +130,7 @@ except ImportError:
         raise RuntimeError("GPMF module not available")
 
 
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.5.0"
 RESOLUTION_OPTIONS = ['source', '8k', '5.3k', '4k', '1080p', '720p', '480p']
 ENCODER_OPTIONS = ['nv', 'intel', 'cpu']
 GPS_OPTIONS = ['3d', '2d']
@@ -139,6 +139,7 @@ SMOOTHING_WINDOW = 5
 # Indicator schemas have been moved to src/gui/indicator_schemas.py
 from src.gui.indicator_schemas import (
     TELEMETRY_SOURCES, get_common_schema, get_value_schema,
+    get_segment_bar_schema,
     _FORM_FIELDS, _ALL_FORM_FIELDS, BUILTIN_FIELDS, TELEMETRY_TAGS,
 )
 
@@ -167,386 +168,53 @@ from src.map_renderer import clear_map_cache
 # Indicator schemas imported from src.gui.indicator_schemas.py above.
 
 
-def run(cmd):
-    p = subprocess.run(cmd, capture_output=True, text=True)
-    if p.returncode != 0:
-        raise RuntimeError((p.stderr or p.stdout).strip())
-    return p.stdout
+from src.video_helpers import (
+    clear_capture_cache,
+    extract_frame,
+    ffprobe_resolution,
+    ffprobe_stream_info,
+    find_executable,
+    find_local_tool,
+    get_cached_capture,
+    get_proxy_path,
+    parse_fps,
+    run,
+    run_live,
+    sanitize_output_path,
+)
+from src.gui.layout_manager import (
+    LayoutManager,
+    default_layout,
+    normalize_layout,
+    resolve_font_path,
+)
+try:
+    from src.gui.telemetry_manager import TelemetryDataManager
+    _MANAGERS_AVAILABLE = True
+except ImportError:
+    TelemetryDataManager = object  # fallback
+    _MANAGERS_AVAILABLE = False
 
 
-def run_live(cmd):
-    p = subprocess.run(cmd)
-    if p.returncode != 0:
-        raise RuntimeError(f'Polecenie zakończone błędem: {p.returncode}')
+# FONT_CACHE, font helpers and all overlay rendering functions
+# have been moved to src/overlay_renderer.py
+from src.overlay_renderer import (
+    FONT_CACHE,
+    s,
+    build_chart_data,
+    load_font,
+    load_font_cache_small,
+    parse_hex_color,
+    generate_history_chart,
+    render_custom_text,
+    rotated_paste,
+    render_time_block,
+    render_value_indicator,
+    compose_overlay,
+    render_preview,
+)
+from src.map_renderer import clear_map_cache
 
-
-def find_local_tool(base_dir, names):
-    for name in names:
-        p = base_dir / name
-        if p.exists():
-            return p
-    return None
-
-
-def find_executable(name, extra_candidates=None):
-    p = shutil.which(name)
-    if p:
-        return p
-    extra_candidates = extra_candidates or []
-    for candidate in extra_candidates:
-        if Path(candidate).exists():
-            return str(Path(candidate))
-    return None
-
-
-def sanitize_output_path(path_text):
-    txt = str(path_text).strip()
-    while txt.endswith('.'):
-        txt = txt[:-1]
-    return Path(txt)
-
-
-_FFPROBE_DURATION_CACHE: dict[str, float] = {}
-_CV2_CAP_CACHE: dict[str, any] = {}
-
-def get_proxy_path(video_path):
-    p = Path(video_path)
-    parent = p.parent
-    name = p.name
-    
-    # 1. Check for f"{stem}_proxy.mp4"
-    for ext in ('.mp4', '.MP4'):
-        cand = parent / f"{p.stem}_proxy{ext}"
-        if cand.exists():
-            return cand
-            
-    # 2. Check for GoPro LRV mapping (e.g. GX010244.MP4 -> GL010244.LRV)
-    if len(name) >= 4:
-        for prefix_type in [('GX', 'GL'), ('gx', 'gl'), ('GH', 'GL'), ('gh', 'gl'), ('GP', 'GL'), ('gp', 'gl')]:
-            src_pref, tgt_pref = prefix_type
-            if name.startswith(src_pref):
-                lrv_name = tgt_pref + name[len(src_pref):]
-                for ext in ('.lrv', '.LRV', '.mp4', '.MP4'):
-                    cand = parent / Path(lrv_name).with_suffix(ext)
-                    if cand.exists() and cand != p:
-                        return cand
-                        
-    # 3. Check for same filename with .lrv / .LRV extension
-    for ext in ('.lrv', '.LRV'):
-        cand = p.with_suffix(ext)
-        if cand.exists() and cand != p:
-            return cand
-            
-    return None
-
-def get_cached_capture(path):
-    path_str = str(path)
-    if path_str not in _CV2_CAP_CACHE:
-        try:
-            import cv2
-            cap = cv2.VideoCapture(path_str)
-            if cap.isOpened():
-                _CV2_CAP_CACHE[path_str] = cap
-            else:
-                return None
-        except Exception:
-            return None
-    return _CV2_CAP_CACHE[path_str]
-
-def clear_capture_cache():
-    for cap in list(_CV2_CAP_CACHE.values()):
-        try:
-            cap.release()
-        except Exception:
-            pass
-    _CV2_CAP_CACHE.clear()
-
-
-def extract_frame(video_paths, timestamp_s, ffmpeg_exe='ffmpeg', ffprobe_exe='ffprobe', target_w=960):
-    if not isinstance(video_paths, list):
-        video_paths = [video_paths]
-
-    target_path = video_paths[0]
-    target_ts = timestamp_s
-
-    # Find the right file in chapter sequence
-    current_offset = 0.0
-    for p in video_paths:
-        if p not in _FFPROBE_DURATION_CACHE:
-            info = ffprobe_stream_info(ffprobe_exe, p)
-            _FFPROBE_DURATION_CACHE[p] = float(info.get('format', {}).get('duration', 0) or 0)
-
-        dur = _FFPROBE_DURATION_CACHE[p]
-
-        if current_offset + dur > timestamp_s:
-            target_path = p
-            target_ts = timestamp_s - current_offset
-            break
-        current_offset += dur
-
-    # Try OpenCV + Proxy first
-    try:
-        import cv2
-        actual_path = get_proxy_path(target_path) or target_path
-        
-        cap = get_cached_capture(actual_path)
-        if cap is not None:
-            cap.set(cv2.CAP_PROP_POS_MSEC, target_ts * 1000.0)
-            ret, frame = cap.read()
-            
-            # Fallback to original if proxy failed
-            if not ret and actual_path != target_path:
-                cap = get_cached_capture(target_path)
-                if cap is not None:
-                    cap.set(cv2.CAP_PROP_POS_MSEC, target_ts * 1000.0)
-                    ret, frame = cap.read()
-            
-            if ret:
-                h, w = frame.shape[:2]
-                if target_w and w > target_w:
-                    scale = target_w / w
-                    frame = cv2.resize(frame, (target_w, int(h * scale)))
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA)
-                return Image.fromarray(frame_rgb)
-    except Exception:
-        pass
-
-    # Old FFmpeg fallback (optimized)
-    startupinfo = None
-    if os.name == 'nt':
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        
-    scale_filter = []
-    if target_w:
-        scale_filter = ['-vf', f'scale={target_w}:-1']
-
-    hwaccel = detect_gpu_decoder()
-    for attempt in (0, 1):
-        cmd = [ffmpeg_exe]
-        if attempt == 0 and hwaccel:
-            cmd.extend(['-hwaccel', hwaccel])
-        cmd.extend(['-ss', str(target_ts), '-i', str(target_path)])
-        cmd.extend(scale_filter)
-        cmd.extend([
-            '-frames:v', '1', '-q:v', '4',
-            '-f', 'image2pipe', '-vcodec', 'mjpeg', '-'
-        ])
-        p = subprocess.run(cmd, capture_output=True, startupinfo=startupinfo)
-        if p.returncode == 0 and p.stdout:
-            break
-        if attempt == 0 and hwaccel:
-            continue  # GPU decode failed – retry with CPU only
-        return None
-    return Image.open(io.BytesIO(p.stdout)).convert('RGBA')
-
-def ffprobe_resolution(video_path, ffprobe='ffprobe'):
-    out = run([ffprobe, '-v', 'error', '-select_streams', 'v:0',
-               '-show_entries', 'stream=width,height', '-of', 'json', str(video_path)])
-    data = json.loads(out)
-    streams = data.get('streams', [])
-    if not streams:
-        return 1280, 720
-    return int(streams[0].get('width', 1280)), int(streams[0].get('height', 720))
-
-
-def ffprobe_stream_info(ffprobe_exe, input_file):
-    out = run([
-        ffprobe_exe, '-v', 'error', '-select_streams', 'v:0',
-        '-show_entries', 'stream=r_frame_rate,avg_frame_rate,width,height:format=duration',
-        '-of', 'json', str(input_file)
-    ])
-    return json.loads(out)
-
-
-def parse_fps(rate_text):
-    if not rate_text or rate_text == '0/0':
-        return 30.0
-    if '/' in rate_text:
-        a, b = rate_text.split('/')
-        a, b = float(a), float(b)
-        if b == 0:
-            return 30.0
-        return a / b
-    return float(rate_text)
-
-
-# s() has been moved to src/overlay_renderer.py (imported above).
-
-
-def default_layout(video_width, video_height):
-    return {
-        "version": 5,
-        "global": {"text_outline": 3},
-        "custom_texts": [],
-        "indicators": {
-            "time_block": {
-                "enabled": True, "label": "Czas", "x": 0.018, "y": 0.030, "rotation": 0,
-                "font_label": 0.0125, "font_date": 0.020, "font_time": 0.020
-            },
-            "speed_visual": {
-                "enabled": True, "label": "", "x": 0.50, "y": 0.78, "rotation": 0, "form": "gauge",
-                "font_size": 0.0125, "size": 0.108, "thickness": 0.007, "min_val": 0, "max_val": 60, "ticks": 6,
-                "source": "gpmf"
-            },
-            "speed_text": {
-                "enabled": True, "label": "", "x": 0.50, "y": 0.855, "rotation": 0, "form": "text",
-                "font_size": 0.042, "size": 0.1, "thickness": 0.001, "min_val": 0, "max_val": 100, "ticks": 0,
-                "source": "gpmf"
-            },
-            "dist_visual": {
-                "enabled": True, "label": "", "x": 0.50, "y": 0.925, "rotation": 0, "form": "bar",
-                "font_size": 0.0125, "size": 0.20, "thickness": 0.004, "min_val": 0, "max_val": 10, "ticks": 5,
-                "show_range_labels": True,
-                "range_label_offset_x": -0.112,
-                "range_label_offset_y": -0.001,
-                "range_label_spread_x": 0.0,
-                "value_offset_x": 0.0,
-                "value_offset_y": 0.0,
-                "source": "gpmf"
-            },
-            "dist_text": {
-                "enabled": True, "label": "", "x": 0.50, "y": 0.955, "rotation": 0, "form": "text",
-                "font_size": 0.017, "size": 0.1, "thickness": 0.001, "min_val": 0, "max_val": 100, "ticks": 0,
-                "source": "gpmf"
-            },
-            "alt_visual": {
-                "enabled": True, "label": "Alt", "x": 0.04, "y": 0.80, "rotation": 90, "form": "bar",
-                "font_size": 0.0125, "size": 0.20, "thickness": 0.006, "min_val": 0, "max_val": 100, "ticks": 5,
-                "show_range_labels": True,
-                "range_label_offset_x": -0.112,
-                "range_label_offset_y": -0.008,
-                "range_label_spread_x": 0.0,
-                "value_offset_x": 0.0,
-                "value_offset_y": 0.0,
-                "source": "gpmf"
-            },
-            "alt_text": {
-                "enabled": True, "label": "", "x": 0.025, "y": 0.8, "rotation": 0, "form": "text",
-                "font_size": 0.017, "size": 0.1, "thickness": 0.001, "min_val": 0, "max_val": 1000, "ticks": 0,
-                "source": "gpmf"
-            },
-            "iso_text": {
-                "enabled": True, "label": "ISO", "x": 0.90, "y": 0.08, "rotation": 0, "form": "text",
-                "font_size": 0.018, "size": 0.1, "thickness": 0.001, "min_val": 0, "max_val": 12800, "ticks": 0
-            },
-            "exposure_text": {
-                "enabled": True, "label": "Exp", "x": 0.82, "y": 0.08, "rotation": 0, "form": "text",
-                "font_size": 0.018, "size": 0.1, "thickness": 0.001, "min_val": 0, "max_val": 10000, "ticks": 0
-            },
-            "temp_text": {
-                "enabled": True, "label": "Temp", "x": 0.74, "y": 0.08, "rotation": 0, "form": "text",
-                "font_size": 0.018, "size": 0.1, "thickness": 0.001, "min_val": 0, "max_val": 100, "ticks": 0
-            },
-            "power_text": {
-                "enabled": True, "label": "Moc", "x": 0.185, "y": 0.08, "rotation": 0, "form": "text",
-                "font_size": 0.018, "size": 0.1, "thickness": 0.001, "min_val": 0, "max_val": 1000, "ticks": 0
-            },
-            "atemp_text": {
-                "enabled": True, "label": "ATemp", "x": 0.265, "y": 0.08, "rotation": 0, "form": "text",
-                "font_size": 0.018, "size": 0.1, "thickness": 0.001, "min_val": -20, "max_val": 60, "ticks": 0
-            },
-            "hr_text": {
-                "enabled": True, "label": "HR", "x": 0.345, "y": 0.08, "rotation": 0, "form": "text",
-                "font_size": 0.018, "size": 0.1, "thickness": 0.001, "min_val": 0, "max_val": 250, "ticks": 0
-            },
-            "cad_text": {
-                "enabled": True, "label": "Cad", "x": 0.41, "y": 0.08, "rotation": 0, "form": "text",
-                "font_size": 0.018, "size": 0.1, "thickness": 0.001, "min_val": 0, "max_val": 200, "ticks": 0
-            },
-            "battery_text": {
-                "enabled": True, "label": "Bat", "x": 0.49, "y": 0.08, "rotation": 0, "form": "text",
-                "font_size": 0.018, "size": 0.1, "thickness": 0.001, "min_val": 0, "max_val": 100, "ticks": 0
-            },
-            "track_map": {
-                "enabled": False, "label": "Mapa", "x": 0.02, "y": 0.15, "rotation": 0, "form": "map",
-                "font_size": 0.012, "size": 0.18, "thickness": 1, "zoom": 16,
-                "source": "gpmf", "map_style": "light_all", "min_val": 0, "max_val": 1, "ticks": 0,
-                "marker_size": 7, "marker_color": "#FFFFFF",
-            },
-        },
-        "smoothing": {"method": "moving_average", "strength": 3}
-    }
-
-
-def normalize_layout(layout_path, video_width, video_height):
-    layout = default_layout(video_width, video_height)
-    if layout_path and Path(layout_path).exists():
-        user = json.loads(Path(layout_path).read_text(encoding='utf-8'))
-        if not isinstance(user, dict):
-            return layout
-        layout["global"].update(user.get("global", {}))
-        layout["smoothing"].update(user.get("smoothing", {}))
-        if "indicators" in user and isinstance(user["indicators"], dict):
-            for k, v in user["indicators"].items():
-                if isinstance(v, dict):
-                    if k in layout["indicators"]:
-                        layout["indicators"][k].update(v)
-                    else:
-                        layout["indicators"][k] = v
-        if "custom_texts" in user:
-            layout["custom_texts"] = user["custom_texts"]
-
-        if user.get("version", 0) < 5:
-            # Prosta migracja z v4
-            old_inds = layout.get("indicators", {})
-            if "gauge" in old_inds:
-                layout["indicators"]["speed_visual"] = old_inds["gauge"]
-                layout["indicators"]["speed_visual"]["form"] = "gauge"
-                layout["indicators"]["speed_visual"]["size"] = old_inds["gauge"].get("radius", 0.1)
-                layout["indicators"]["speed_visual"]["thickness"] = old_inds["gauge"].get("arc_width", 0.007)
-                layout["indicators"]["speed_visual"]["max_val"] = old_inds["gauge"].get("gauge_max", 60)
-                layout["indicators"]["speed_visual"]["ticks"] = 6
-            if "speed_text" in old_inds:
-                layout["indicators"]["speed_text"]["form"] = "text"
-                layout["indicators"]["speed_text"]["font_size"] = old_inds["speed_text"].get("font_speed", 0.04)
-            if "distance_block" in old_inds:
-                db = old_inds["distance_block"]
-                layout["indicators"]["dist_visual"] = db.copy()
-                layout["indicators"]["dist_visual"]["form"] = "bar"
-                layout["indicators"]["dist_visual"]["size"] = db.get("bar_width", 0.2)
-                layout["indicators"]["dist_visual"]["thickness"] = db.get("bar_height", 0.004)
-                layout["indicators"]["dist_text"] = db.copy()
-                layout["indicators"]["dist_text"]["form"] = "text"
-                layout["indicators"]["dist_text"]["font_size"] = db.get("font_value", 0.017)
-            layout["version"] = 5
-
-    return layout
-
-
-def resolve_font_path(family_name):
-    """Znajduje ścieżkę pliku czcionki dla podanej nazwy rodziny (Windows)."""
-    if os.name != 'nt':
-        return family_name
-    if Path(family_name).exists():
-        return family_name
-    try:
-        import winreg
-        fonts_dir = Path(os.environ.get('WINDIR', 'C:\\Windows'), 'Fonts')
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                            r'SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts') as key:
-            count = winreg.QueryInfoKey(key)[1]
-            for i in range(count):
-                name, value, _ = winreg.EnumValue(key, i)
-                if name.lower().startswith(family_name.lower()) and '(TrueType)' in name:
-                    candidate = fonts_dir / value
-                    if candidate.exists():
-                        return str(candidate)
-    except Exception:
-        pass
-    for ext in ('.ttf', '.otf'):
-        candidate = Path(os.environ.get('WINDIR', 'C:\\Windows'), 'Fonts') / f'{family_name}{ext}'
-        if candidate.exists():
-            return str(candidate)
-    return family_name
-
-
-# load_font() has been moved to src/overlay_renderer.py (imported above).
-
-
-# All FFmpeg pipeline functions (init_worker, generate_overlay_sequence,
-# stream_overlay_to_ffmpeg, apply_overlay_video, etc.)
-# have been moved to src/ffmpeg_pipeline.py
 from src.ffmpeg_pipeline import (
     WORKER_CACHE,
     RESOLUTION_MAP,
@@ -571,8 +239,6 @@ from src.ffmpeg_pipeline import (
 )
 
 
-# ─── NOWY PIPELINE: Producent-Konsument → pipe do FFmpeg ───────────────────
-
 class HudTunerApp:
     def __init__(self, root):
         self.root = root
@@ -585,33 +251,7 @@ class HudTunerApp:
         self.meta_path     = None
         self.gpx_path      = None   # manually selected or auto-discovered GPX
         self.fit_path      = None   # manually selected or auto-discovered FIT
-        self.records       = []
-        # Dane z GPMF (GoPro)
-        self.speed_samples = []
-        self.alt_samples      = []
-        self.track_samples    = []
-        # Dane z GPX (nadpisują GPMF dla wybranych wskaźników)
-        self.gpx_speed_samples = []
-        self.gpx_alt_samples   = []
-        self.gpx_track_samples = []
-        self.gpx_power_samples = []
-        self.gpx_atemp_samples = []
-        self.gpx_hr_samples = []
-        self.gpx_cad_samples = []
-        # Dane z FIT (dynamiczne pola, dict[str, list])
-        self.fit_data: dict[str, list] = {}
-        self.fit_ext_fields: list[str] = []   # FIT-origin indicator keys
-        # GPS track for map (lat/lon points)
-        self.gps_track: list = []
-        self.gpx_gps_track: list = []
-        self.fit_gps_track: list = []
-        self.gps_track: list = []              # GPMF GPS track for map
-        self.gpx_gps_track: list = []          # GPX GPS track
-        self.fit_gps_track: list = []          # FIT GPS track
-        self.iso_samples      = []
-        self.exposure_samples    = []
-        self.temperature_samples = []
-        self.start_dt_utc  = None
+
         self.src_img       = Image.new('RGB', (1280, 720), (0, 0, 0))
         self.last_preview_timestamp = -1
         self.layout        = default_layout(*self.src_img.size)
@@ -655,15 +295,18 @@ class HudTunerApp:
             self.telemetry = None
             self.layout_mgr = None
 
+        # ── Controllers ──
+        from src.gui.preview_controller import PreviewController
+        from src.gui.export_controller import ExportController
+        self.preview_ctrl = PreviewController(self)
+        self.export_ctrl = ExportController(self)
+
         self.video_duration_s = 0.0
         self._refresh_after_id = None
         self.render_cancel_event = threading.Event()
         self._active_process = None
         self._render_executor = None
         self.render_button = None
-        self.indicator_bboxes = {}  # {key: (x,y,w,h)} in original image coords, for clickable preview
-        self._drag_start: Optional[tuple[int, int]] = None
-        self._drag_indicator: Optional[str] = None
 
         self.encoder_var         = tk.StringVar(value=detect_best_encoder())
         self.rotation_var        = tk.StringVar(value='auto')
@@ -688,180 +331,72 @@ class HudTunerApp:
         self._preview_worker_thread = None
         self._start_preview_worker()
 
+        # ── Setup Views ──
+        from src.gui.views.left_panel import LeftPanelView
+        from src.gui.views.center_panel import CenterPanelView
+        from src.gui.views.right_panel import RightPanelView
+
         self.main_pw = tk.PanedWindow(root, orient=tk.HORIZONTAL, sashrelief=tk.RAISED)
         self.main_pw.pack(fill='both', expand=True)
-        self.left_panel   = tk.Frame(self.main_pw)
-        self.center_panel = tk.Frame(self.main_pw)
-        self.right_panel  = tk.Frame(self.main_pw)
-        self.main_pw.add(self.left_panel,   minsize=10, width=400)
-        self.main_pw.add(self.center_panel, minsize=1000)
-        self.main_pw.add(self.right_panel,  minsize=60, width=80)
 
-        self.left_scroll = ScrollableFrame(self.left_panel)
-        self.left_scroll.pack(fill='both', expand=True, padx=8, pady=8)
-        left = self.left_scroll.inner
+        self.left_panel_view = LeftPanelView(self.main_pw, self)
+        self.center_panel_view = CenterPanelView(self.main_pw, self)
+        self.right_panel_view = RightPanelView(self.main_pw, self)
 
-        top = tk.Frame(left)
-        top.pack(fill=tk.X, pady=(0, 8))
-        tk.Button(top, text='Wybierz MP4',    command=self.open_video).pack(anchor='w', pady=(6,0))
-        tk.Label(top,  textvariable=self.meta_info_var,  justify='left', anchor='w').pack(fill=tk.X, pady=(6,0))
-        tk.Button(top, text='Wczytaj GPX/FIT', command=self.open_telemetry).pack(anchor='w', pady=(4, 0))
-        self.gpx_info_var = tk.StringVar(value='GPX: brak (auto-wykrywanie)')
-        tk.Label(top, textvariable=self.gpx_info_var, justify='left', anchor='w',
-                 fg='#0077cc').pack(fill=tk.X, pady=(2, 0))
-        self.fit_info_var = tk.StringVar(value='FIT: brak')
-        tk.Label(top, textvariable=self.fit_info_var, justify='left', anchor='w',
-                 fg='#cc5500').pack(fill=tk.X, pady=(0, 4))
-        tk.Button(top, text='Zapisz Konfigurację', command=self.save_configuration).pack(fill=tk.X, pady=(6,0))
-        tk.Button(top, text='Wczytaj Konfiguracje',          command=self.load_json).pack(fill=tk.X, pady=(6,0))
-
-        # ── Wybór czcionki HUD ──
-        font_frame = tk.LabelFrame(left, text='Czcionka HUD')
-        font_frame.pack(fill=tk.X, pady=(0, 8))
-        fonts = sorted(tkfont.families())
-        if 'Arial' not in fonts and fonts:
-            self.font_style_var.set(fonts[0])
-            self.font_path = resolve_font_path(fonts[0])
-        self.font_combo = ttk.Combobox(font_frame, textvariable=self.font_style_var,
-                                        values=fonts, state='readonly')
-        self.font_combo.pack(fill=tk.X, padx=4, pady=4)
-        self.font_combo.bind('<<ComboboxSelected>>', self.on_font_change)
-
-        # ── Outline (obramowanie tekstu) ──
-        outline_frame = tk.LabelFrame(left, text='Obramowanie (outline)')
-        outline_frame.pack(fill=tk.X, pady=(0, 8))
-        self.outline_var.set(self.layout.get("global", {}).get("text_outline", 3))
-        tk.Scale(outline_frame, variable=self.outline_var, from_=0, to=10,
-                 resolution=1, orient=tk.HORIZONTAL, length=200,
-                 command=lambda _: self.on_outline_change()).pack(padx=4, pady=4)
-
-        builtin_box = tk.LabelFrame(left, text='Wskaźniki Telemetrii')
-        builtin_box.pack(fill=tk.X, pady=(0, 8))
-        list_frame = tk.Frame(builtin_box)
-        list_frame.pack(fill=tk.X)
-        # Lewa lista – główne wskaźniki
-        left_list_frame = tk.Frame(list_frame)
-        left_list_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        tk.Label(left_list_frame, text="Główne", font=('', 8, 'bold')).pack()
-        self.indicator_list = tk.Listbox(left_list_frame, height=10, exportselection=False)
-        for key in self.layout['indicators'].keys():
-            if key not in GPX_EXT_FIELDS and not key.startswith("fit_"):
-                self.indicator_list.insert(tk.END, key)
-        self.indicator_list.pack(fill=tk.X)
-        self.indicator_list.bind('<<ListboxSelect>>', self.on_builtin_select)
-        self.indicator_list.selection_set(0)
-        # Prawa lista – Extension (GPX Ext + FIT Ext)
-        ext_list_frame = tk.Frame(list_frame)
-        ext_list_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
-        tk.Label(ext_list_frame, text="Extension", font=('', 8, 'bold')).pack()
-        self.ext_list = tk.Listbox(ext_list_frame, height=10, exportselection=False)
-        self._rebuild_ext_list()
-        self.ext_list.pack(fill=tk.X)
-        self.ext_list.bind('<<ListboxSelect>>', self.on_ext_select)
-        # Przycisk resetu wskaźników (poniżej list)
-        reset_frame = tk.Frame(builtin_box)
-        reset_frame.pack(fill=tk.X, pady=(4, 0))
-        tk.Button(reset_frame, text='Resetuj wskaźniki (bez daty/czasu)',
-                  command=self.reset_indicators).pack(fill=tk.X)
-
-        # ── Custom Texts sekcja ──
-        custom_texts_box = tk.LabelFrame(left, text='Niestandardowe Teksty')
-        custom_texts_box.pack(fill=tk.X, pady=(0, 8))
-        ct_list_frame = tk.Frame(custom_texts_box)
-        ct_list_frame.pack(fill=tk.X)
-        self.custom_texts_list = tk.Listbox(ct_list_frame, height=5, exportselection=False)
-        # Wypełnij listę nazwami custom_texts
-        self._rebuild_custom_texts_list()
-        self.custom_texts_list.pack(fill=tk.X)
-        self.custom_texts_list.bind('<<ListboxSelect>>', self.on_custom_text_select)
-        ct_btn_frame = tk.Frame(custom_texts_box)
-        ct_btn_frame.pack(fill=tk.X, pady=(2, 0))
-        tk.Button(ct_btn_frame, text='Dodaj tekst', command=self.add_custom_text).pack(side=tk.LEFT, padx=(0, 4))
-        tk.Button(ct_btn_frame, text='Usuń', command=self.remove_custom_text).pack(side=tk.LEFT)
-
-        props_box = tk.LabelFrame(left, text='Właściwości')
-        props_box.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
-        self.props_scroll = ScrollableFrame(props_box)
-        self.props_scroll.pack(fill='both', expand=True, ipady=150)
-        self.props_container = self.props_scroll.inner
-        self.property_widgets = {}
-        self.edit_mode = 'builtin'
-
-        center_pw = tk.PanedWindow(self.center_panel, orient=tk.VERTICAL, sashrelief=tk.RAISED)
-        center_pw.pack(fill='both', expand=True, padx=8, pady=8)
-        preview_wrap = tk.Frame(center_pw)
-        center_pw.add(preview_wrap, minsize=480, height=550)
-        self.preview_label = tk.Label(preview_wrap, bg='#222')
-        self.preview_label.pack(fill=tk.BOTH, expand=True)
-        self.preview_label.bind('<Configure>', self.on_preview_resize)
-        self.preview_label.bind('<Button-1>', self._on_preview_mouse_down)
-        self.preview_label.bind('<B1-Motion>', self._on_preview_drag_motion)
-        self.preview_label.bind('<ButtonRelease-1>', self._on_preview_mouse_up)
-
-        seek_frame = tk.Frame(center_pw)
-        center_pw.add(seek_frame, minsize=90)
-        self.seek_slider = tk.Scale(seek_frame, variable=self.seek_var, from_=0, to=100,
-                                   orient=tk.HORIZONTAL, showvalue=False, label="Czas wideo",
-                                   resolution=1, tickinterval=0,
-                                   command=lambda _: (self.schedule_refresh(100), self.update_seek_time_label()),
-                                   takefocus=1)
-        self.seek_slider.pack(fill=tk.X)
-        self.seek_slider.bind('<Button-1>', lambda e: self.seek_slider.focus_set())
-        for key in ('<Left>', '<Right>', '<Up>', '<Down>'):
-            self.seek_slider.bind(key, self.on_seek_arrow)
-
-        tick_canvas = tk.Canvas(seek_frame, height=20, highlightthickness=0, bg='#1e1e1e')
-        tick_canvas.pack(fill=tk.X)
-        tick_canvas.bind('<Configure>', lambda e: self.draw_tick_labels())
-        self.tick_canvas = tick_canvas
-
-        # ── Loading progress frame (below center_pw, hidden by default) ──
-        loading_frame = tk.Frame(self.center_panel, height=40)
-        self.loading_progress = ttk.Progressbar(loading_frame, orient=tk.HORIZONTAL, mode='determinate', maximum=100, value=0)
-        self.loading_progress.pack(fill=tk.X, pady=(4, 2), padx=8)
-        self.loading_status_label = tk.Label(loading_frame, textvariable=self.loading_status, font=('Consolas', 8), anchor='w')
-        self.loading_status_label.pack(fill=tk.X, pady=(0, 4), padx=8)
-        self._loading_frame = loading_frame
-
-        # ── Render progress frame (below center_pw, hidden by default) ──
-        progress_frame = tk.Frame(self.center_panel, height=50)
-        self.render_progress = ttk.Progressbar(progress_frame, orient=tk.HORIZONTAL, mode='determinate')
-        self.render_progress.pack(fill=tk.X, pady=(4, 2), padx=8)
-        self.render_stats = tk.Label(progress_frame, text="Gotowy", font=('Consolas', 8))
-        self.render_stats.pack(fill=tk.X, pady=(0, 4), padx=8)
-        self._render_frame = progress_frame
-
-        render_box = tk.LabelFrame(self.right_panel, text='Render')
-        render_box.pack(fill=tk.X, padx=8, pady=8)
-        tk.Label(render_box, text='Encoder').pack(anchor='w')
-        tk.OptionMenu(render_box, self.encoder_var, *ENCODER_OPTIONS).pack(fill=tk.X)
-        tk.Label(render_box, text='Rotation').pack(anchor='w', pady=(6,0))
-        rot_om = tk.OptionMenu(render_box, self.rotation_var, *ROTATION_OPTIONS, command=lambda _: self.refresh())
-        rot_om.config(width=6)
-        rot_om.pack(fill=tk.X)
-        tk.Label(render_box, text='Resolution').pack(anchor='w', pady=(6,0))
-        tk.OptionMenu(render_box, self.resolution_var, *RESOLUTION_OPTIONS).pack(fill=tk.X)
-        tk.Label(render_box, text='Update rate').pack(anchor='w', pady=(6,0))
-        update_rate_om = tk.OptionMenu(render_box, self.update_rate_var, 'Full', 'Half', 'Quarter', command=lambda _: self.refresh())
-        update_rate_om.pack(fill=tk.X)
-        tk.Label(render_box, text='Video bitrate').pack(anchor='w', pady=(6,0))
-        tk.Entry(render_box, textvariable=self.video_bitrate_var).pack(fill=tk.X)
-        tk.Label(render_box, text='TZ Offset (UTC)').pack(anchor='w', pady=(6,0))
-        tk.Entry(render_box, textvariable=self.tz_offset_var).pack(fill=tk.X)
-        tk.Label(render_box, text='Workers').pack(anchor='w', pady=(6,0))
-        wm = tk.Frame(render_box)
-        wm.pack(fill=tk.X)
-        tk.Radiobutton(wm, text='Auto',    variable=self.worker_mode_var, value='auto').pack(side=tk.LEFT)
-        tk.Radiobutton(wm, text='Ręcznie', variable=self.worker_mode_var, value='manual').pack(side=tk.LEFT)
-        tk.Entry(render_box, textvariable=self.worker_count_var).pack(fill=tk.X)
-        tk.Label(render_box, text='Output file').pack(anchor='w', pady=(6,0))
-        tk.Entry(render_box, textvariable=self.output_var).pack(fill=tk.X)
-
-        self.render_button = tk.Button(render_box, text='Eksport do mp4', command=self.render_now)
-        self.render_button.pack(fill=tk.X, pady=(8,0))
+        self.main_pw.add(self.left_panel_view.frame, minsize=10, width=400)
+        self.main_pw.add(self.center_panel_view.frame, minsize=1000)
+        self.main_pw.add(self.right_panel_view.frame, minsize=60, width=80)
 
         self.build_property_editor_builtin()
         self.root.after_idle(self.refresh)
+
+    @property
+    def fit_ext_fields(self):
+        return self.telemetry.fit_ext_fields if self.telemetry else []
+
+    @fit_ext_fields.setter
+    def fit_ext_fields(self, val):
+        if self.telemetry:
+            self.telemetry.fit_ext_fields = val
+
+    @property
+    def records(self):
+        return self.telemetry.records if self.telemetry else []
+
+    @records.setter
+    def records(self, val):
+        if self.telemetry:
+            self.telemetry.records = val
+
+    @property
+    def fit_data(self):
+        return self.telemetry.fit_data if self.telemetry else {}
+
+    @fit_data.setter
+    def fit_data(self, val):
+        if self.telemetry:
+            self.telemetry.fit_data = val
+
+    @property
+    def start_dt_utc(self):
+        return self.telemetry.start_dt_utc if self.telemetry else None
+
+    @start_dt_utc.setter
+    def start_dt_utc(self, val):
+        if self.telemetry:
+            self.telemetry.start_dt_utc = val
+
+    @property
+    def indicator_bboxes(self):
+        """Delegate indicator bounding boxes dictionary to the preview controller.
+        Returns an empty dict if preview controller is not yet created.
+        """
+        return getattr(self, 'preview_ctrl', None).indicator_bboxes if getattr(self, 'preview_ctrl', None) else {}
+
+    @indicator_bboxes.setter
+    def indicator_bboxes(self, val):
+        if getattr(self, 'preview_ctrl', None):
+            self.preview_ctrl.indicator_bboxes = val
 
     def _start_preview_worker(self):
         def worker():
@@ -899,147 +434,6 @@ class HudTunerApp:
 
     def on_preview_resize(self, event=None):
         self.schedule_refresh(60)
-
-    # ── Drag-to-move indicators on preview ─────────────────────────────────
-
-    def _map_preview_to_orig(self, px: int, py: int) -> tuple[float, float]:
-        """Map preview-label pixel coords to original image coords."""
-        pw = self.preview_label.winfo_width()
-        ph = self.preview_label.winfo_height()
-        src_w, src_h = self.src_img.size
-        if pw < 10 or ph < 10 or src_w < 1 or src_h < 1:
-            return 0.0, 0.0
-        scale = min(pw / src_w, ph / src_h)
-        thumb_w = int(src_w * scale)
-        thumb_h = int(src_h * scale)
-        offset_x = (pw - thumb_w) // 2
-        offset_y = (ph - thumb_h) // 2
-        return (px - offset_x) / scale, (py - offset_y) / scale
-
-    def _on_preview_mouse_down(self, event):
-        """Record drag start and find indicator under cursor."""
-        if not self.speed_samples or not self.indicator_bboxes:
-            return
-        orig_x, orig_y = self._map_preview_to_orig(event.x, event.y)
-        hit_key = None
-        indicator_order = (
-            ['alt_text', 'alt_visual', 'dist_text', 'dist_visual',
-             'speed_text', 'speed_visual', 'time_block', 'track_map',
-             'temp_text', 'exposure_text', 'iso_text',
-             'cad_text', 'hr_text', 'atemp_text', 'power_text', 'battery_text']
-            + self.fit_ext_fields
-        )
-        for key in indicator_order:
-            bbox = self.indicator_bboxes.get(key)
-            if bbox is None:
-                continue
-            x, y, w, h = bbox
-            if x <= orig_x <= x + w and y <= orig_y <= y + h:
-                hit_key = key
-                break
-        if hit_key is None:
-            return
-        self._drag_start = (event.x, event.y)
-        self._drag_indicator = hit_key
-
-    def _on_preview_drag_motion(self, event):
-        """Drag the indicator: update x/y in layout and refresh preview."""
-        if self._drag_start is None or self._drag_indicator is None:
-            return
-        key = self._drag_indicator
-        cfg = self.layout.get('indicators', {}).get(key)
-        if cfg is None:
-            return
-        src_w, src_h = self.src_img.size
-        if src_w < 1 or src_h < 1:
-            return
-        # Map current mouse position to original image coords
-        orig_x, orig_y = self._map_preview_to_orig(event.x, event.y)
-        # Convert to relative (0.0-1.0) layout coordinates
-        cfg['x'] = max(0.0, min(1.0, orig_x / src_w))
-        cfg['y'] = max(0.0, min(1.0, orig_y / src_h))
-        # Update property editor widgets (suppress callback cascade)
-        prev_suppress = getattr(self, '_suppress_builtin_change', False)
-        self._suppress_builtin_change = True
-        try:
-            for field_name in ('x', 'y'):
-                w = self.property_widgets.get(field_name)
-                if w is not None:
-                    try:
-                        w.var.set(cfg[field_name])
-                        w.sync_entry()
-                    except Exception:
-                        pass
-        finally:
-            self._suppress_builtin_change = prev_suppress
-        self.schedule_refresh(20)
-
-    def _on_preview_mouse_up(self, event):
-        """Mouse release: if drag occurred, refresh; otherwise run click-to-select."""
-        if self._drag_start is None:
-            return
-        dx = abs(event.x - self._drag_start[0])
-        dy = abs(event.y - self._drag_start[1])
-        was_drag = dx > 3 or dy > 3
-        self._drag_start = None
-        drag_indicator = self._drag_indicator
-        self._drag_indicator = None
-        if was_drag:
-            self.refresh()
-        elif drag_indicator is not None:
-            self.on_preview_click(event)
-
-    def _find_indicator_at(self, orig_x: float, orig_y: float) -> Optional[str]:
-        """Return indicator key at original-image coords, or None."""
-        indicator_order = (
-            ['alt_text', 'alt_visual', 'dist_text', 'dist_visual',
-             'speed_text', 'speed_visual', 'time_block', 'track_map',
-             'temp_text', 'exposure_text', 'iso_text',
-             'cad_text', 'hr_text', 'atemp_text', 'power_text', 'battery_text']
-            + self.fit_ext_fields
-        )
-        for key in indicator_order:
-            bbox = self.indicator_bboxes.get(key)
-            if bbox is None:
-                continue
-            x, y, w, h = bbox
-            if x <= orig_x <= x + w and y <= orig_y <= y + h:
-                return key
-        return None
-
-    def on_preview_click(self, event):
-        """Handle click on preview label – find indicator under cursor and select it."""
-        if not self.speed_samples or not self.indicator_bboxes:
-            return
-        orig_x, orig_y = self._map_preview_to_orig(event.x, event.y)
-        hit_key = self._find_indicator_at(orig_x, orig_y)
-        if hit_key is None:
-            return
-
-        # Select the indicator in the appropriate list
-        ext_all = list(GPX_EXT_FIELDS) + self.fit_ext_fields
-        if hit_key in ext_all:
-            try:
-                idx = ext_all.index(hit_key)
-                self.ext_list.selection_clear(0, tk.END)
-                self.ext_list.selection_set(idx)
-                self.ext_list.activate(idx)
-                self.indicator_list.selection_clear(0, tk.END)
-                self.custom_texts_list.selection_clear(0, tk.END)
-                self.build_property_editor_builtin()
-            except (ValueError, tk.TclError):
-                pass
-        else:
-            all_builtin = [self.indicator_list.get(i) for i in range(self.indicator_list.size())]
-            try:
-                idx = all_builtin.index(hit_key)
-                self.indicator_list.selection_clear(0, tk.END)
-                self.indicator_list.selection_set(idx)
-                self.indicator_list.activate(idx)
-                self.ext_list.selection_clear(0, tk.END)
-                self.build_property_editor_builtin()
-            except (ValueError, tk.TclError):
-                pass
 
     def format_time(self, total_sec):
         total_sec = int(total_sec)
@@ -1148,9 +542,13 @@ class HudTunerApp:
         cfg = self.layout['indicators'].get(name)
         if cfg is None:
             return
-        schema = BUILTIN_FIELDS.get(name, get_value_schema())
-        # Filter by form: keep common fields + current-form fields + indicator-specific extras
         form = cfg.get("form", "text")
+        # Use form-specific schema for segment_bar, otherwise fall back to builtin or default
+        if form == "segment_bar":
+            schema = get_segment_bar_schema()
+        else:
+            schema = BUILTIN_FIELDS.get(name, get_value_schema())
+        # Filter by form: keep common fields + current-form fields + indicator-specific extras
         allowed = _FORM_FIELDS.get(form, _FORM_FIELDS["text"])
         schema = [
             f for f in schema
@@ -1288,6 +686,7 @@ class HudTunerApp:
         # Clear map cache when zoom or map_style changes
         old_zoom = cfg.get("zoom")
         old_style = cfg.get("map_style")
+        old_form = cfg.get("form", "text")
         for field_name, widget in self.property_widgets.items():
             cfg[field_name] = widget.get()
         # Synchronizuj layout_mgr po zmianie
@@ -1295,6 +694,11 @@ class HudTunerApp:
             self.layout_mgr.layout = self.layout
         if key == "track_map" and (cfg.get("zoom") != old_zoom or cfg.get("map_style") != old_style):
             clear_map_cache()
+        # If form changed, rebuild the property panel to show/hide relevant fields
+        if cfg.get("form", "text") != old_form:
+            self._suppress_builtin_change = True
+            self.build_property_editor_builtin()
+            self._suppress_builtin_change = False
         self.schedule_refresh(60)
 
     # ── Telemetry delegation ────────────────────────────────────────────────

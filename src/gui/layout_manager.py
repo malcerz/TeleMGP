@@ -170,3 +170,171 @@ class LayoutManager:
         if 0 <= index < len(texts):
             texts[index].update(kwargs)
 
+
+def default_layout(video_width: int, video_height: int) -> dict[str, Any]:
+    return {
+        "version": 5,
+        "global": {"text_outline": 3},
+        "custom_texts": [],
+        "indicators": {
+            "time_block": {
+                "enabled": True, "label": "Czas", "x": 0.018, "y": 0.030, "rotation": 0,
+                "font_label": 0.0125, "font_date": 0.020, "font_time": 0.020
+            },
+            "speed_visual": {
+                "enabled": True, "label": "", "x": 0.50, "y": 0.78, "rotation": 0, "form": "gauge",
+                "font_size": 0.0125, "size": 0.108, "thickness": 0.007, "min_val": 0, "max_val": 60, "ticks": 6,
+                "source": "gpmf"
+            },
+            "speed_text": {
+                "enabled": True, "label": "", "x": 0.50, "y": 0.855, "rotation": 0, "form": "text",
+                "font_size": 0.042, "size": 0.1, "thickness": 0.001, "min_val": 0, "max_val": 100, "ticks": 0,
+                "source": "gpmf"
+            },
+            "dist_visual": {
+                "enabled": True, "label": "", "x": 0.50, "y": 0.925, "rotation": 0, "form": "bar",
+                "font_size": 0.0125, "size": 0.20, "thickness": 0.004, "min_val": 0, "max_val": 10, "ticks": 5,
+                "show_range_labels": True,
+                "range_label_offset_x": 0.0,
+                "range_label_offset_y": 0.0,
+                "range_label_spread_x": 0.0,
+                "value_offset_x": 0.0,
+                "value_offset_y": 0.0,
+                "source": "gpmf"
+            },
+            "dist_text": {
+                "enabled": True, "label": "", "x": 0.50, "y": 0.955, "rotation": 0, "form": "text",
+                "font_size": 0.017, "size": 0.1, "thickness": 0.001, "min_val": 0, "max_val": 100, "ticks": 0,
+                "source": "gpmf"
+            },
+            "alt_visual": {
+                "enabled": True, "label": "Alt", "x": 0.04, "y": 0.80, "rotation": 90, "form": "bar",
+                "font_size": 0.0125, "size": 0.20, "thickness": 0.006, "min_val": 0, "max_val": 100, "ticks": 5,
+                "show_range_labels": True,
+                "range_label_offset_x": 0.0,
+                "range_label_offset_y": 0.0,
+                "range_label_spread_x": 0.0,
+                "value_offset_x": 0.0,
+                "value_offset_y": 0.0,
+                "source": "gpmf"
+            },
+            "alt_text": {
+                "enabled": True, "label": "", "x": 0.025, "y": 0.8, "rotation": 0, "form": "text",
+                "font_size": 0.017, "size": 0.1, "thickness": 0.001, "min_val": 0, "max_val": 1000, "ticks": 0,
+                "source": "gpmf"
+            },
+            "iso_text": {
+                "enabled": True, "label": "ISO", "x": 0.90, "y": 0.08, "rotation": 0, "form": "text",
+                "font_size": 0.018, "size": 0.1, "thickness": 0.001, "min_val": 0, "max_val": 12800, "ticks": 0
+            },
+            "exposure_text": {
+                "enabled": True, "label": "Exp", "x": 0.82, "y": 0.08, "rotation": 0, "form": "text",
+                "font_size": 0.018, "size": 0.1, "thickness": 0.001, "min_val": 0, "max_val": 10000, "ticks": 0
+            },
+            "temp_text": {
+                "enabled": True, "label": "Temp", "x": 0.74, "y": 0.08, "rotation": 0, "form": "text",
+                "font_size": 0.018, "size": 0.1, "thickness": 0.001, "min_val": 0, "max_val": 100, "ticks": 0
+            },
+            "power_text": {
+                "enabled": True, "label": "Moc", "x": 0.185, "y": 0.08, "rotation": 0, "form": "text",
+                "font_size": 0.018, "size": 0.1, "thickness": 0.001, "min_val": 0, "max_val": 1000, "ticks": 0
+            },
+            "atemp_text": {
+                "enabled": True, "label": "ATemp", "x": 0.265, "y": 0.08, "rotation": 0, "form": "text",
+                "font_size": 0.018, "size": 0.1, "thickness": 0.001, "min_val": -20, "max_val": 60, "ticks": 0
+            },
+            "hr_text": {
+                "enabled": True, "label": "HR", "x": 0.345, "y": 0.08, "rotation": 0, "form": "text",
+                "font_size": 0.018, "size": 0.1, "thickness": 0.001, "min_val": 0, "max_val": 250, "ticks": 0
+            },
+            "cad_text": {
+                "enabled": True, "label": "Cad", "x": 0.41, "y": 0.08, "rotation": 0, "form": "text",
+                "font_size": 0.018, "size": 0.1, "thickness": 0.001, "min_val": 0, "max_val": 200, "ticks": 0
+            },
+            "battery_text": {
+                "enabled": True, "label": "Bat", "x": 0.49, "y": 0.08, "rotation": 0, "form": "text",
+                "font_size": 0.018, "size": 0.1, "thickness": 0.001, "min_val": 0, "max_val": 100, "ticks": 0
+            },
+            "track_map": {
+                "enabled": False, "label": "Mapa", "x": 0.02, "y": 0.15, "rotation": 0, "form": "map",
+                "font_size": 0.012, "size": 0.18, "thickness": 1, "zoom": 16,
+                "source": "gpmf", "map_style": "light_all", "min_val": 0, "max_val": 1, "ticks": 0,
+                "marker_size": 7, "marker_color": "#FFFFFF",
+            },
+        },
+        "smoothing": {"method": "moving_average", "strength": 3}
+    }
+
+
+def normalize_layout(layout_path: Path | str | None, video_width: int, video_height: int) -> dict[str, Any]:
+    layout = default_layout(video_width, video_height)
+    if layout_path and Path(layout_path).exists():
+        user = json.loads(Path(layout_path).read_text(encoding='utf-8'))
+        if not isinstance(user, dict):
+            return layout
+        layout["global"].update(user.get("global", {}))
+        layout["smoothing"].update(user.get("smoothing", {}))
+        if "indicators" in user and isinstance(user["indicators"], dict):
+            for k, v in user["indicators"].items():
+                if isinstance(v, dict):
+                    if k in layout["indicators"]:
+                        layout["indicators"][k].update(v)
+                    else:
+                        layout["indicators"][k] = v
+        if "custom_texts" in user:
+            layout["custom_texts"] = user["custom_texts"]
+
+        if user.get("version", 0) < 5:
+            old_inds = layout.get("indicators", {})
+            if "gauge" in old_inds:
+                layout["indicators"]["speed_visual"] = old_inds["gauge"]
+                layout["indicators"]["speed_visual"]["form"] = "gauge"
+                layout["indicators"]["speed_visual"]["size"] = old_inds["gauge"].get("radius", 0.1)
+                layout["indicators"]["speed_visual"]["thickness"] = old_inds["gauge"].get("arc_width", 0.007)
+                layout["indicators"]["speed_visual"]["max_val"] = old_inds["gauge"].get("gauge_max", 60)
+                layout["indicators"]["speed_visual"]["ticks"] = 6
+            if "speed_text" in old_inds:
+                layout["indicators"]["speed_text"]["form"] = "text"
+                layout["indicators"]["speed_text"]["font_size"] = old_inds["speed_text"].get("font_speed", 0.04)
+            if "distance_block" in old_inds:
+                db = old_inds["distance_block"]
+                layout["indicators"]["dist_visual"] = db.copy()
+                layout["indicators"]["dist_visual"]["form"] = "bar"
+                layout["indicators"]["dist_visual"]["size"] = db.get("bar_width", 0.2)
+                layout["indicators"]["dist_visual"]["thickness"] = db.get("bar_height", 0.004)
+                layout["indicators"]["dist_text"] = db.copy()
+                layout["indicators"]["dist_text"]["form"] = "text"
+                layout["indicators"]["dist_text"]["font_size"] = db.get("font_value", 0.017)
+            layout["version"] = 5
+
+    return layout
+
+
+def resolve_font_path(family_name: str) -> str:
+    """Znajduje ścieżkę pliku czcionki dla podanej nazwy rodziny (Windows)."""
+    import os
+    if os.name != 'nt':
+        return family_name
+    if Path(family_name).exists():
+        return family_name
+    try:
+        import winreg
+        fonts_dir = Path(os.environ.get('WINDIR', 'C:\\Windows'), 'Fonts')
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            r'SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts') as key:
+            count = winreg.QueryInfoKey(key)[1]
+            for i in range(count):
+                name, value, _ = winreg.EnumValue(key, i)
+                if name.lower().startswith(family_name.lower()) and '(TrueType)' in name:
+                    candidate = fonts_dir / value
+                    if candidate.exists():
+                        return str(candidate)
+    except Exception:
+        pass
+    for ext in ('.ttf', '.otf'):
+        candidate = Path(os.environ.get('WINDIR', 'C:\\Windows'), 'Fonts') / f'{family_name}{ext}'
+        if candidate.exists():
+            return str(candidate)
+    return family_name
+
+
