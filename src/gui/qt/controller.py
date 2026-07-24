@@ -597,6 +597,16 @@ class AppController:
             defaults["source"] = "fit"
         elif key in ("hr_text", "cad_text", "power_text", "atemp_text", "battery_text"):
             defaults["source"] = "gpx"
+        elif key == "track_map":
+            # Mapa – od razu jako tryb map (nie text)
+            defaults["form"] = "map"
+            defaults["size"] = 0.18
+            defaults["zoom"] = 16
+            defaults["map_style"] = "light_all"
+            defaults["marker_size"] = 7
+            defaults["marker_color"] = "#FFFFFF"
+            defaults["x"] = 0.02
+            defaults["y"] = 0.15
 
         self.layout["indicators"][key] = defaults
 
