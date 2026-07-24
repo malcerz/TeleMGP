@@ -194,10 +194,14 @@ def _parse_int32_values(val: Any) -> list[int]:
     return []
 
 
-def to_exiftool_json(parsed: list[tuple[str, Any]], source_file: str) -> list[dict[str, Any]]:
+def to_exiftool_json(parsed: list[tuple[str, Any]], source_file: str,
+                     start_dt: Optional[datetime] = None) -> list[dict[str, Any]]:
     """Convert a flat list of parsed GPMF (key, value) tuples into an
     ExifTool-style JSON document containing GPS, altitude, speed, and
     camera metadata fields.
+
+    If *start_dt* is given (e.g. from video creation_time), it is used as
+    the absolute time base for TSMP/STMP offsets when no GPSU block exists.
     """
     out: dict[str, Any] = {"SourceFile": source_file}
     doc = 1
@@ -269,7 +273,7 @@ def to_exiftool_json(parsed: list[tuple[str, Any]], source_file: str) -> list[di
                     if s3d is not None:
                         out[f"{prefix}:GPSSpeed3D"] = s3d
 
-                    if current_block_start_dt is not None and key == "GPS9":
+                    if current_block_start_dt is not None:
                         sample_idx = i // step
                         sample_dt = current_block_start_dt + timedelta(seconds=sample_idx * 0.1)
                         out[f"{prefix}:GPSDateTime"] = _fmt_dt(sample_dt)

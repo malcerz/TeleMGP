@@ -9,6 +9,8 @@ Every function is a pure transformation: parameters in, PIL.Image out.
 from __future__ import annotations
 
 import math
+import threading
+from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
 try:
@@ -422,6 +424,8 @@ def render_value_indicator(
     current_position: Optional[float] = None,
     gps_track: Optional[list[tuple[Any, float, float]]] = None,
     supersample: int = 1,
+    target_dt: Optional[datetime] = None,
+    start_dt_utc: Optional[datetime] = None,
 ) -> tuple[Optional[Image.Image], int, int, Optional[dict[str, Any]]]:
     """Render a single telemetry indicator (text, gauge, bar, or chart form).
 
@@ -1109,52 +1113,114 @@ def render_value_indicator(
 
         return img, s(cfg["x"], canvas_w), s(cfg["y"], canvas_h), None
 
-    elif form == "map":
-        if gps_track and len(gps_track) >= 2:
-            from src.moving_map import MovingMapRenderer
-
-            # Cache renderer per-track (track + zoom + style = unique key)
-            track_id = id(gps_track)
-            zoom = int(cfg.get("zoom", 16))
-            map_style = cfg.get("map_style", "light_all")
-            cache_key = (track_id, zoom, map_style)
-            if not hasattr(render_value_indicator, "_map_renderers"):
-                render_value_indicator._map_renderers = {}  # type: ignore[attr-defined]
-            _cache = render_value_indicator._map_renderers  # type: ignore[attr-defined]
-            if cache_key not in _cache:
-                _cache[cache_key] = MovingMapRenderer(
-                    gps_track, zoom=zoom, style=map_style,
-                    marker_color=_parse_marker_color(cfg.get("marker_color", "#FFFFFF")),
-                    marker_radius=int(cfg.get("marker_size", 7)),
-                )
-            renderer = _cache[cache_key]
-
-            map_w = size_px
-            map_h = max(40, int(map_w * 0.65))
-            dur = (gps_track[-1][0].timestamp() - gps_track[0][0].timestamp()) if gps_track else 1.0
-            ts = (current_position if current_position is not None else 0.0) * dur
-            map_img = renderer.render(ts, map_w, map_h)
-            return map_img, s(cfg["x"], canvas_w), s(cfg["y"], canvas_h), None
-
     elif form == "static_map":
         if gps_track and len(gps_track) >= 2:
-            from src.map_renderer import render_map_overlay
+            try:
+                from src.map_renderer import render_map_overlay, precache_map_tiles
 
-            ci = 0
-            if current_position is not None:
-                ci = int(round(current_position * (len(gps_track) - 1)))
-                ci = max(0, min(len(gps_track) - 1, ci))
+                map_w = size_px
+                map_h = max(40, int(map_w * 0.65))
+                zoom = int(cfg.get("zoom", 16))
+                map_style = cfg.get("map_style", "light_all")
 
-            map_w = size_px
-            map_h = max(40, int(map_w * 0.65))
-            map_img = render_map_overlay(
-                gps_track, ci, map_w, map_h,
-                zoom=int(cfg.get("zoom", 16)),
-                map_style=cfg.get("map_style", "light_all"),
-                marker_radius=int(cfg.get("marker_size", 7)),
-                marker_color=_parse_marker_color(cfg.get("marker_color", "#FFFFFF")),
-            )
-            return map_img, s(cfg["x"], canvas_w), s(cfg["y"], canvas_h), None
+                # Pre-cache wszystkich kafelków dla całej trasy w tle (jednorazowo)
+                _pc_key = ("static_precache", id(gps_track), zoom, map_style)
+                if not hasattr(render_value_indicator, "_static_map_precached"):
+                    render_value_indicator._static_map_precached = set()
+                if _pc_key not in render_value_indicator._static_map_precached:
+                    render_value_indicator._static_map_precached.add(_pc_key)
+                    threading.Thread(
+                        target=precache_map_tiles,
+                        args=(gps_track, zoom, map_style),
+                        daemon=True,
+                    ).start()
+
+                if target_dt is not None:
+                    import bisect
+                    target_ts = target_dt.timestamp()
+                    # Cache listy timestampów dla wydajności (buduj raz na zmianę gps_track)
+                    cache_key = id(gps_track)
+                    if (not hasattr(render_value_indicator, "_static_gps_times")
+                            or render_value_indicator._static_gps_times_id != cache_key):
+                        render_value_indicator._static_gps_times = [
+                            (dt.replace(tzinfo=timezone.utc).timestamp() if dt.tzinfo is None else dt.timestamp())
+                            for dt, _, _ in gps_track
+                        ]
+                        render_value_indicator._static_gps_times_id = cache_key
+                    times = render_value_indicator._static_gps_times
+                    ci = bisect.bisect_left(times, target_ts)
+                    # Wybierz najbliższy z dwóch sąsiednich indeksów
+                    if ci > 0 and ci < len(times) and abs(times[ci] - target_ts) > abs(times[ci - 1] - target_ts):
+                        ci = ci - 1
+                    ci = max(0, min(len(gps_track) - 1, ci))
+                else:
+                    # Fallback: stary sposób (current_position)
+                    ci = int(round((current_position if current_position is not None else 0.0) * (len(gps_track) - 1)))
+                    ci = max(0, min(len(gps_track) - 1, ci))
+
+                map_img = render_map_overlay(
+                    gps_track, ci, map_w, map_h,
+                    zoom=zoom,
+                    map_style=map_style,
+                    marker_radius=int(cfg.get("marker_size", 7)),
+                    marker_color=_parse_marker_color(cfg.get("marker_color", "#FFFFFF")),
+                    download_missing=False,
+                )
+                return map_img, s(cfg["x"], canvas_w), s(cfg["y"], canvas_h), None
+            except Exception:
+                # W razie błędu wpadamy do placeholdera
+                pass
+
+    elif form == "map":
+        if gps_track and len(gps_track) >= 2:
+            try:
+                from src.moving_map import MovingMapRenderer
+
+                # Cache renderer per-track (track + zoom + style = unique key)
+                track_id = id(gps_track)
+                zoom = int(cfg.get("zoom", 16))
+                map_style = cfg.get("map_style", "light_all")
+                cache_key = (track_id, zoom, map_style)
+                if not hasattr(render_value_indicator, "_map_renderers"):
+                    render_value_indicator._map_renderers = {}  # type: ignore[attr-defined]
+                _cache = render_value_indicator._map_renderers  # type: ignore[attr-defined]
+                if cache_key not in _cache:
+                    renderer = MovingMapRenderer(
+                        gps_track, zoom=zoom, style=map_style,
+                        marker_color=_parse_marker_color(cfg.get("marker_color", "#FFFFFF")),
+                        marker_radius=int(cfg.get("marker_size", 7)),
+                    )
+                    _cache[cache_key] = renderer
+                    # Uruchom w tle pobieranie kafelków dla całej trasy
+                    # (rendering poniżej używa tylko cache'a, więc nie blokuje)
+                    renderer.background_precache(margin=2)
+                else:
+                    renderer = _cache[cache_key]
+
+                map_w = size_px
+                map_h = max(40, int(map_w * 0.65))
+                if target_dt is not None:
+                    # ts = offset od PIERWSZEGO punktu GPS (zgodny z MovingMapRenderer._idx)
+                    gps0 = gps_track[0][0]
+                    if hasattr(gps0, 'timestamp'):
+                        if gps0.tzinfo is None:
+                            gps0_ts = gps0.replace(tzinfo=timezone.utc).timestamp()
+                        else:
+                            gps0_ts = gps0.timestamp()
+                        ts = target_dt.timestamp() - gps0_ts
+                    else:
+                        ts = 0.0
+                else:
+                    # Fallback: znormalizowana pozycja (0-1) × długość trasy GPS
+                    dur = (gps_track[-1][0].timestamp() - gps_track[0][0].timestamp())
+                    ts = (current_position if current_position is not None else 0.0) * dur
+                # Nie pobieraj kafelków podczas podglądu – tylko z cache'a
+                map_img = renderer.render(ts, map_w, map_h, download_missing=False)
+                return map_img, s(cfg["x"], canvas_w), s(cfg["y"], canvas_h), None
+            except Exception:
+                # Jeśli renderowanie mapy się nie powiedzie (brak netu, timeout,
+                # błąd importu), wpadamy do placeholdera poniżej
+                pass
 
     # Wspólny placeholder dla mapy (brak GPS lub za mało punktów)
     if form in ("map", "static_map"):
@@ -1206,6 +1272,8 @@ def compose_overlay(
     current_position: Optional[float] = None,
     extra_indicators: Optional[dict[str, tuple[float, str, str]]] = None,
     gps_track: Optional[list[tuple[Any, float, float]]] = None,
+    target_dt: Optional[datetime] = None,
+    start_dt_utc: Optional[datetime] = None,
 ) -> Image.Image:
     """Compose the complete HUD overlay image from all indicators.
 
@@ -1347,6 +1415,7 @@ def compose_overlay(
             current_position=current_position,
             gps_track=gps_track,
             supersample=ss,
+            target_dt=target_dt,
         )
 
         if res:
@@ -1645,6 +1714,8 @@ def render_preview(
     current_position: Optional[float] = None,
     extra_indicators: Optional[dict[str, tuple[float, str, str]]] = None,
     gps_track: Optional[list[tuple[Any, float, float]]] = None,
+    target_dt: Optional[datetime] = None,
+    start_dt_utc: Optional[datetime] = None,
 ) -> Image.Image:
     """Render a preview image: source frame with HUD overlay composited on top."""
     # Avoid a full-resolution copy if the image is already RGBA
@@ -1681,6 +1752,8 @@ def render_preview(
         current_position=current_position,
         extra_indicators=extra_indicators,
         gps_track=gps_track,
+        target_dt=target_dt,
+        start_dt_utc=start_dt_utc,
     )
     img.alpha_composite(overlay)
     return img

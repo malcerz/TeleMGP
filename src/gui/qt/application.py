@@ -27,9 +27,9 @@ def main() -> None:
 
     # ── Tryb testowy: python TeleMGP0.py -test ──────────────────────────
     if "-test" in sys.argv:
-        base_dir = Path(__file__).resolve().parent.parent.parent
+        base_dir = Path(__file__).resolve().parent.parent.parent.parent
         video_dir = base_dir / "video"
-        video_path = video_dir / "GL030032.mp4"
+        video_path = video_dir / "GL010032.mp4"
         fit_path = video_dir / "Morning_Ride.fit"
 
         if video_path.exists() and fit_path.exists():

@@ -84,8 +84,12 @@ def _cache_path(z: int, x: int, y: int) -> Path:
 _last_request_time: float = 0.0
 
 
-def download_tile(z: int, x: int, y: int, style: str = DEFAULT_MAP_STYLE) -> Optional[Image.Image]:
-    """Download a single map tile, using local disk cache. Respects fair-use delay."""
+def download_tile(z: int, x: int, y: int, style: str = DEFAULT_MAP_STYLE, download: bool = True) -> Optional[Image.Image]:
+    """Download a single map tile, using local disk cache. Respects fair-use delay.
+
+    Args:
+        download: If False, only return already-cached tiles (skip network).
+    """
     if Image is None:
         return None
 
@@ -95,6 +99,9 @@ def download_tile(z: int, x: int, y: int, style: str = DEFAULT_MAP_STYLE) -> Opt
             return Image.open(cp).convert("RGBA")
         except Exception:
             pass  # corrupted — re-download
+
+    if not download:
+        return None  # tylko cache, bez sieci
 
     global _last_request_time
     elapsed = time.time() - _last_request_time
@@ -158,6 +165,33 @@ def clear_map_cache() -> None:
 # ── Map overlay renderer ────────────────────────────────────────────────────
 
 
+def precache_map_tiles(
+    gps_track: list[tuple[datetime, float, float]],
+    zoom: int = 16,
+    map_style: str = DEFAULT_MAP_STYLE,
+    margin: int = 2,
+) -> int:
+    """Download all unique map tiles needed for the entire GPS track.
+
+    Runs synchronously — call in a background thread for non-blocking pre-cache.
+    Returns the number of tiles downloaded.
+    """
+    if Image is None or not gps_track:
+        return 0
+    needed: set[tuple[int, int, int]] = set()
+    for _, lat, lon in gps_track:
+        tx = int(lon_to_tile_x(lon, zoom))
+        ty = int(lat_to_tile_y(lat, zoom))
+        for dx in range(-margin, margin + 1):
+            for dy in range(-margin, margin + 1):
+                needed.add((zoom, tx + dx, ty + dy))
+    cnt = 0
+    for z, x, y in needed:
+        if download_tile(z, x, y, style=map_style, download=True) is not None:
+            cnt += 1
+    return cnt
+
+
 def render_map_overlay(
     gps_track: list[tuple[datetime, float, float]],
     current_index: int,
@@ -170,6 +204,7 @@ def render_map_overlay(
     marker_color: tuple[int, int, int, int] = (255, 255, 255, 255),
     marker_radius: int = 7,
     margin: int = 4,
+    download_missing: bool = True,
 ) -> Image.Image:
     """Render a map with GPS track and current-position marker.
 
@@ -187,6 +222,8 @@ def render_map_overlay(
         marker_color: RGBA tuple for the position marker.
         marker_radius: Radius of the position marker in pixels.
         margin: Padding around the map in pixels.
+        download_missing: If True (default), download tiles not yet cached.
+            If False, only use tiles already on disk — uncached areas stay dark.
 
     Returns:
         RGBA PIL.Image containing the rendered map or a placeholder.
@@ -230,7 +267,7 @@ def render_map_overlay(
         tile_images: dict[tuple[int, int], Image.Image] = {}
         for tx in range(tx1, tx2 + 1):
             for ty in range(ty1, ty2 + 1):
-                tile = download_tile(zoom, tx, ty, style=map_style)
+                tile = download_tile(zoom, tx, ty, style=map_style, download=download_missing)
                 if tile is not None:
                     tile_images[(tx, ty)] = tile
 

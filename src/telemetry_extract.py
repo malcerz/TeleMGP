@@ -117,9 +117,22 @@ def parse_float_maybe(val: Any) -> Optional[float]:
 
 
 def parse_gps_coord(val: Any) -> Optional[float]:
-    """Parse a GPS coordinate string (deg/min/sec) to decimal degrees."""
+    """Parse a GPS coordinate to decimal degrees.
+
+    Accepts:
+      - ExifTool format: ``"54 deg 19' 51.3\" N"`` or ``"54 19 51.3 N"``
+      - Decimal degrees: ``54.3307535`` (float or string)
+    """
     if not val:
         return None
+
+    # Already a number or parseable as decimal degree
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        pass
+
+    # ExifTool deg/min/sec format
     txt = str(val)
     try:
         parts = txt.replace("deg", "").replace("'", "").replace('"', "").split()

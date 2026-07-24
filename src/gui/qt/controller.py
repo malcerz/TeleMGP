@@ -31,6 +31,7 @@ from src.gui.indicator_schemas import BUILTIN_FIELDS
 from src.telemetry_extract import (
     extract_speed_samples, extract_altitude_samples, extract_track_samples,
     extract_iso_samples, extract_exposure_samples, extract_temperature_samples,
+    extract_gps_track,
     interpolate_speed, interpolate_distance, interpolate_altitude,
     interpolate_value, smooth_speed_samples, smooth_speed_values,
     find_metadata_json, ensure_records_list,
@@ -52,7 +53,7 @@ from src.gui.qt.models import DataStream, FieldSchema, get_schema_for_form
 from src.gui.qt.signals import get_signals
 
 try:
-    from telemetry_gpmf import gpmf_to_exiftool_json
+    from src.telemetry_gpmf_new import gpmf_to_exiftool_json
     _GPMF_AVAILABLE = True
 except ImportError:
     _GPMF_AVAILABLE = False
@@ -125,7 +126,7 @@ class AppController:
             write_records_fn=lambda p, r: None,
             extract_samples_exiftool_fn=lambda f: [],
             extract_altitude_exiftool_fn=lambda f: [],
-            extract_gps_track_fn=lambda r: [],
+            extract_gps_track_fn=extract_gps_track,
             find_gps_anchor_fn=lambda r: None,
             smooth_values_fn=smooth_speed_values,
         )
@@ -168,6 +169,7 @@ class AppController:
         s.sig_settings_changed.connect(self._on_settings_changed)
         s.sig_playback_start.connect(self._on_playback_start)
         s.sig_playback_stop.connect(self._on_playback_stop)
+        s.sig_data_streams_ready.connect(lambda _: self._render_preview(0))
 
     def _load_startup_preset(self) -> None:
         """Wczytaj _startup_preset z def_layout.json jeśli istnieje."""
@@ -334,13 +336,18 @@ class AppController:
         threading.Thread(target=bg_load, daemon=True).start()
 
     def _load_or_generate_telemetry(self) -> None:
-        """Wczytaj istniejący JSON lub wygeneruj przez ExifTool/GPMF."""
+        """Wczytaj istniejący JSON lub wygeneruj synchronicznie (blokada).
+
+        Blokuje do czasu sparsowania danych, emitując postęp przez sig_progress.
+        """
         if not self.video_path:
             return
+
         meta = self.video_path.with_suffix(".json")
         if meta.exists():
             records = ensure_records_list(load_json_with_fallback(meta))
             if records:
+                self.signals.sig_progress.emit(45, "Wczytywanie JSON...")
                 self.telemetry.records = records
                 self.telemetry.load_gpmf_from_exiftool(self.video_path)
                 self.telemetry.load_gpmf_records(records)
@@ -348,7 +355,85 @@ class AppController:
                 self.meta_path = meta
                 return
 
-        self._generate_meta_json()
+        # ── JSON nie istnieje → generuj synchronicznie (blokada) ──────
+        self.signals.sig_progress.emit(45, "Generowanie metadanych...")
+
+        data = None
+        method = ""
+        # Próbuj GPMF (bezpośrednio z ffmpeg — dużo szybszy niż ExifTool)
+        if _GPMF_AVAILABLE and self.ffmpeg_exe and self.ffprobe_exe:
+            try:
+                self.signals.sig_progress.emit(50, "GPMF: czytanie strumienia...")
+                data = gpmf_to_exiftool_json(
+                    str(self.video_paths[0]),
+                    self.ffmpeg_exe, self.ffprobe_exe,
+                )
+                if data:
+                    method = "GPMF"
+                    print(f"[GPMF] Succeeded — extracted {len(data[0]) if isinstance(data, list) and data else 0} keys", flush=True)
+                else:
+                    print("[GPMF] Returned empty data", flush=True)
+            except Exception as exc:
+                print(f"[GPMF] Failed: {exc} — falling back to ExifTool", flush=True)
+
+        # Fallback: ExifTool
+        if not data:
+            self.signals.sig_progress.emit(55, "ExifTool: odczyt metadanych...")
+            exe = find_executable(
+                str(self.exiftool_path),
+                [str(self.base_dir / "exiftool.exe"), "exiftool.exe"],
+            )
+            if not exe:
+                raise RuntimeError("Nie znaleziono exiftool")
+            proc = subprocess.run(
+                [exe, "-ee", "-j", "-G3", str(self.video_paths[0])],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True,
+            )
+            if proc.returncode != 0:
+                raise RuntimeError(proc.stderr or "ExifTool error")
+            data = json.loads(proc.stdout)
+            method = "ExifTool"
+
+        if data:
+            flat = data[0] if isinstance(data, list) else data
+            json_path = self.video_path.with_suffix(".json")
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(flat, f, indent=2, ensure_ascii=False)
+            self.meta_path = json_path
+
+            self.signals.sig_progress.emit(65, f"Parsowanie danych ({method})...")
+            records = ensure_records_list([flat])
+            self.telemetry.records = records
+            # Przekazujemy flat zamiast uruchamiać ExifTool ponownie
+            self.telemetry.load_gpmf_from_exiftool(self.video_path, flat=flat)
+            self.telemetry.load_gpmf_records(records)
+            self.telemetry.load_gps_track(records)
+
+            # Jeśli start_dt_utc wciąż None (brak GPSDateTime w GPMF),
+            # użyj daty z metadanych wideo
+            if self.telemetry.start_dt_utc is None and self.ffprobe_exe:
+                try:
+                    import subprocess, json as _json
+                    p = subprocess.run(
+                        [self.ffprobe_exe, "-v", "error", "-show_format", "-of", "json",
+                         str(self.video_path)],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    if p.returncode == 0:
+                        info = _json.loads(p.stdout)
+                        ct = info.get("format", {}).get("tags", {}).get("creation_time")
+                        if ct:
+                            from datetime import timezone as _tz
+                            dt = datetime.fromisoformat(ct.replace("Z", "+00:00"))
+                            self.telemetry.start_dt_utc = dt.astimezone(_tz.utc).replace(tzinfo=None)
+                            print(f"[start_dt_utc] Fallback from video creation_time: {self.telemetry.start_dt_utc}", flush=True)
+                except Exception as exc:
+                    print(f"[start_dt_utc] Fallback failed: {exc}", flush=True)
+
+        self.signals.sig_progress.emit(70, "Metadane gotowe")
+
+        # Nie wołaj _generate_meta_json() — wszystko jest już zrobione
 
     def _generate_meta_json(self) -> None:
         """Generuje metadata JSON dla wideo (GPMF → ExifTool fallback)."""
@@ -400,6 +485,10 @@ class AppController:
                     self.telemetry.load_gpmf_records(records)
                     self.telemetry.load_gps_track(records)
 
+                    # Ponownie odkryj strumienie danych i odśwież UI
+                    streams = self._discover_data_streams()
+                    self.signals.sig_data_streams_ready.emit(streams)
+
                 self.signals.sig_progress.emit(70, "Metadane gotowe")
 
             except Exception as e:
@@ -445,10 +534,17 @@ class AppController:
                 sample_count=len(tm.track_samples),
                 value_range=(0, max(vals)),
             ))
+
+        if tm.track_samples or tm.fit_gps_track or tm.gpx_gps_track or tm.gps_track:
             streams.append(DataStream(
-                key="track_map", display_name="Mapa", source="gpmf",
+                key="track_map", display_name="Mapa", source="fit",
                 category="gps", unit="", suggested_form="map",
-                sample_count=len(tm.track_samples),
+                sample_count=max(
+                    len(tm.track_samples),
+                    len(tm.fit_gps_track),
+                    len(tm.gpx_gps_track),
+                    len(tm.gps_track),
+                ),
                 value_range=(0, 0),
             ))
         if tm.alt_samples:
@@ -831,7 +927,7 @@ class AppController:
             min_alt = max_alt = None
             target_dt = None
 
-            if self.telemetry.speed_samples and self.telemetry.start_dt_utc:
+            if self.telemetry.start_dt_utc:
                 current_ts = seek_seconds if seek_seconds is not None else 0
                 target_dt = self.telemetry.start_dt_utc + timedelta(seconds=current_ts)
                 if target_dt.tzinfo is None:
@@ -920,13 +1016,11 @@ class AppController:
                     self.telemetry.resolve_samples,
                 )
 
-                # Per-indicator smoothing
+                # Per-indicator smoothing&source resolution
                 for ind_key, ind_cfg in self.layout.get("indicators", {}).items():
                     if not ind_cfg.get("enabled", True):
                         continue
                     window = int(ind_cfg.get("smoothing", 5))
-                    if window < 2:
-                        continue
                     val = self._resolve_smoothed_value(
                         ind_key, ind_cfg, target_dt, window)
                     if val is not None:
@@ -944,6 +1038,12 @@ class AppController:
                 chart_data=chart_data,
                 current_position=current_position,
                 indicator_values=indicator_values,
+                gps_track=self.telemetry.get_gps_track_for_source(
+                    self.layout.get("indicators", {})
+                    .get("track_map", {}).get("source", "fit")
+                ),
+                target_dt=target_dt,
+                start_dt_utc=self.telemetry.start_dt_utc,
             )
 
             # Konwertuj PIL Image → QPixmap
@@ -1142,10 +1242,9 @@ class AppController:
             gpx_hr_samples=self.telemetry.gpx_hr_samples,
             gpx_cad_samples=self.telemetry.gpx_cad_samples,
             fit_data=self.telemetry.fit_data,
-            gps_track=(
-                self.telemetry.fit_gps_track
-                or self.telemetry.gpx_gps_track
-                or self.telemetry.gps_track
+            gps_track=self.telemetry.get_gps_track_for_source(
+                self.layout.get("indicators", {})
+                .get("track_map", {}).get("source", "fit")
             ),
             progress_cb=lambda val, txt: self.signals.sig_progress.emit(val, txt),
             cancel_event=self.render_cancel_event,

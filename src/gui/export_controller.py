@@ -35,7 +35,7 @@ from src.gui.dialogs.statistics_dialog import show_statistics_dialog
 
 # GPMF binary parser – native Python extraction
 try:
-    from telemetry_gpmf import gpmf_to_exiftool_json
+    from src.telemetry_gpmf_new import gpmf_to_exiftool_json
     _GPMF_AVAILABLE = True
 except ImportError:
     _GPMF_AVAILABLE = False

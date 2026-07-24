@@ -466,6 +466,8 @@ def render_overlay_job(job: tuple) -> int:
         chart_data=chart_data, current_position=current_position,
         extra_indicators=extra_indicators,
         gps_track=WORKER_CACHE.get("gps_track", []),
+        target_dt=current_dt_utc,
+        start_dt_utc=start_dt_utc,
     )
     img.save(overlay_dir / f"overlay_{index:06d}.bmp", format="BMP")
     return index
@@ -870,6 +872,8 @@ def render_overlay_frame(
         chart_data=chart_data, current_position=current_position,
         extra_indicators=extra_indicators,
         gps_track=WORKER_CACHE.get("gps_track", []),
+        target_dt=current_dt_utc,
+        start_dt_utc=start_dt_utc,
     )
 
 

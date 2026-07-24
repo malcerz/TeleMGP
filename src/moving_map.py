@@ -131,7 +131,7 @@ def _download_tile_raw(z, x, y, style) -> bytes | None:
         if e < REQUEST_DELAY: time.sleep(REQUEST_DELAY - e)
         try:
             req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(req, timeout=10) as r:
+            with urllib.request.urlopen(req, timeout=2) as r:
                 data = r.read()
         except Exception: return None
         finally: _last_fetch = time.time()
@@ -196,6 +196,26 @@ class MovingMapRenderer:
             if d: self._cache.put(z, x, y, self._style, d); cnt += 1
         return cnt
 
+    def background_precache(self, margin=2, done_callback=None) -> threading.Thread:
+        """Uruchamia w tle pobieranie wszystkich kafelków dla całej trasy.
+
+        Args:
+            margin: Liczba dodatkowych kafelków wokół każdego punktu GPS.
+            done_callback: Opcjonalna funkcja wołana po zakończeniu cache'owania.
+        Returns:
+            Wątek wykonujący precache (daemon, można go ignorować).
+        """
+        def _run():
+            self.precache_tiles(margin=margin)
+            if done_callback:
+                try:
+                    done_callback()
+                except Exception:
+                    pass
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        return t
+
     def missing_tiles(self) -> int:
         """Return # of tiles not yet cached."""
         needed: set[tuple] = set()
@@ -209,8 +229,17 @@ class MovingMapRenderer:
     # ── Render one frame ────────────────────────────────────────────
 
     def render(self, ts: float, w: int, h: int, *, draw_track=True,
-               draw_marker=True) -> Image.Image:
-        """Map image centred on GPS position at timestamp *ts* (seconds)."""
+               draw_marker=True,
+               download_missing=True) -> Image.Image:
+        """Map image centred on GPS position at timestamp *ts* (seconds).
+
+        Args:
+            ts: Timestamp in seconds (relative to track start).
+            w, h: Output image size in pixels.
+            draw_track, draw_marker: Whether to draw track line/position marker.
+            download_missing: If True, download missing tiles on demand (may block).
+                If False, only cached tiles are used – uncached areas stay grey.
+        """
         idx = self._idx(ts)
         cx, cy = self._tiles[idx]
         cpx, cpy = self._px_x[idx], self._px_y[idx]
@@ -229,7 +258,7 @@ class MovingMapRenderer:
         for ty in range(ty1, ty2):
             for tx in range(tx1, tx2):
                 tile = self._cache.get(self._zoom, tx, ty, self._style)
-                if tile is None:
+                if tile is None and download_missing:
                     d = _download_tile_raw(self._zoom, tx, ty, self._style)
                     if d:
                         self._cache.put(self._zoom, tx, ty, self._style, d)

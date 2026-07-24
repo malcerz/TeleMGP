@@ -213,16 +213,22 @@ class TelemetryDataManager:
     # GPMF loading (from ExifTool flat dict + records)
     # ------------------------------------------------------------------
 
-    def load_gpmf_from_exiftool(self, video_path: Path | str) -> None:
+    def load_gpmf_from_exiftool(self, video_path: Path | str, flat: Optional[dict] = None) -> None:
         """Load GPMF speed/altitude directly from ExifTool flat output.
+
+        Jeśli *flat* jest przekazany, pomija wywołanie ExifTool (szybsze).
+        W przeciwnym razie uruchamia ExifTool na *video_path*.
 
         This is the primary GPMF entry point used by update_telemetry_data().
         """
         if not self._load_exiftool or not video_path:
             return
 
-        flat = self._load_exiftool(video_path)
-        if not flat:
+        if flat is None:
+            flat = self._load_exiftool(video_path)
+            if not flat:
+                return
+        elif not flat:
             return
 
         # Speed from ExifTool
@@ -387,16 +393,46 @@ class TelemetryDataManager:
             return False
 
         # Extract GPS track (timestamp, lat, lon) for map rendering
-        self.fit_gps_track = [
-            (r["timestamp"], r["lat"], r["lon"])
-            for r in records
-            if r.get("lat") is not None and r.get("lon") is not None
-        ]
+        # — synchronize timestamps to video start so they match start_dt_utc
+        if start_dt is not None and records:
+            # FIT timestamps są naive UTC (parse_fit zdejmuje timezone),
+            # start_dt może być aware UTC. Sprowadź do naive UTC.
+            first_ts = records[0]["timestamp"]
+            if start_dt.tzinfo is not None:
+                start_dt_naive = start_dt.replace(tzinfo=None)
+            else:
+                start_dt_naive = start_dt
+            offset = start_dt_naive - first_ts
+            self.fit_gps_track = [
+                (r["timestamp"] + offset, r["lat"], r["lon"])
+                for r in records
+                if r.get("lat") is not None and r.get("lon") is not None
+            ]
+        elif records:
+            self.fit_gps_track = [
+                (r["timestamp"], r["lat"], r["lon"])
+                for r in records
+                if r.get("lat") is not None and r.get("lon") is not None
+            ]
 
         # Synchronise to video timeline to get per-field sample dict
         fit_result = sync_fit_to_video(records, start_dt)
         if not fit_result:
             return False
+
+        # Przesuń timestampy fit_data o ten sam offset co fit_gps_track
+        # (sync_fit_to_video zwraca surowe czasy FIT bez przesunięcia)
+        if start_dt is not None and records:
+            first_ts = records[0]["timestamp"]
+            if start_dt.tzinfo is not None:
+                start_dt_naive = start_dt.replace(tzinfo=None)
+            else:
+                start_dt_naive = start_dt
+            offset = start_dt_naive - first_ts
+            shifted: dict[str, list[tuple[datetime, float]]] = {}
+            for key, samples in fit_result.items():
+                shifted[key] = [(ts + offset, v) for ts, v in samples]
+            fit_result = shifted
 
         self.fit_data = {}
         for key, samples in fit_result.items():

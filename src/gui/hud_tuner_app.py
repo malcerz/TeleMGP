@@ -121,7 +121,7 @@ from src.telemetry_extract import (  # noqa: E402
 
 # GPMF binary parser – native Python extraction (no external ExifTool needed)
 try:
-    from telemetry_gpmf import gpmf_to_exiftool_json
+    from src.telemetry_gpmf_new import gpmf_to_exiftool_json
     _GPMF_AVAILABLE = True
 except ImportError:
     _GPMF_AVAILABLE = False
@@ -1203,8 +1203,9 @@ class HudTunerApp:
             date_txt, time_txt = "2026-06-17", "12:00:00.0"
             indicator_values = {}
             max_speed_kmh = None
+            target_dt = None
 
-            if self.speed_samples and self.start_dt_utc:
+            if self.start_dt_utc:
                 update_rate = self.update_rate_var.get()
                 if update_rate == 'Half':
                     N = 2
@@ -1332,7 +1333,9 @@ class HudTunerApp:
                                          _bboxes=self.indicator_bboxes,
                                          chart_data=chart_data, current_position=current_position,
                                          extra_indicators=extra_indicators,
-                                         gps_track=map_gps_track)
+                                         gps_track=map_gps_track,
+                                         target_dt=target_dt,
+                                         start_dt_utc=self.start_dt_utc)
                 preview.thumbnail((pw, ph), Image.BILINEAR)
                 self.photo = ImageTk.PhotoImage(preview)
                 self.preview_label.configure(image=self.photo)
