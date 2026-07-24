@@ -166,7 +166,7 @@ class PropertyEditor(QWidget):
             outer.addLayout(hform)
 
         # ── Zakładki ──────────────────────────────────────────────────
-        tab_order = ["Text", "Labels", "Ticks", "Gauge", "Shape"]
+        tab_order = ["Text", "Labels", "Ticks", "Gauge", "Chart", "Segments", "Shape"]
         grouped: dict[str, list[FieldSchema]] = {t: [] for t in tab_order}
         for field in schema:
             if field.tab in grouped:

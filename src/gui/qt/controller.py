@@ -669,13 +669,6 @@ class AppController:
         form = cfg.get("form", "text")
         schema = get_schema_for_form(form)
 
-        # Dodaj pole source jeśli istnieje w konfiguracji
-        if "source" in cfg:
-            schema.insert(2, FieldSchema(
-                "source", "choice", "Źródło", tab="",
-                choices=["gpmf", "gpx", "fit"],
-            ))
-
         self.signals.sig_properties_ready.emit(stream_key, schema, dict(cfg))
         self._render_preview()
 
@@ -684,8 +677,25 @@ class AppController:
         defaults: dict[str, Any] = {
             "enabled": True, "label": key, "x": 0.5, "y": 0.5,
             "rotation": 0, "form": "text", "font_size": 0.025,
-            "size": 0.1, "thickness": 0.002, "min_val": 0, "max_val": 100,
+            "size": 0.1, "thickness": 3, "min_val": 0, "max_val": 100,
             "ticks": 0, "show_value": True, "source": "gpmf", "smoothing": 0,
+            "decimals": 1, "show_units": True,
+            # Text
+            "text_offset_x": 0.0, "text_offset_y": 0.0,
+            # Gauge
+            "start_angle": 180, "sweep_angle": 180,
+            "marker_size": 6, "marker_color": "#FFFFFF",
+            "bar_width": 3, "show_bar": False,
+            # Chart
+            "window_s": 30.0, "chart_color": "#00AAFF",
+            "fill_color": "#00AAFF", "fill_alpha": 80,
+            "grid_color": "#444444", "show_grid": True,
+            "line_width": 2,
+            # Segments
+            "segments": 30, "segment_gap": 3, "segment_radius": 4,
+            "inactive_alpha": 60, "inactive_color": "#333333",
+            "direction": "horizontal", "grow_height": False,
+            "show_min": True, "show_max": True, "show_label": True,
         }
 
         # Ustal źródło na podstawie klucza

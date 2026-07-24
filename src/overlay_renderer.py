@@ -730,8 +730,8 @@ def render_value_indicator(
                     font=gauge_font,
                 )[2]
 
-                ox = int(round(cfg.get("value_offset_x", 0.0) * img_size))
-                oy = int(round(cfg.get("value_offset_y", 0.0) * img_size))
+                ox = int(round(cfg.get("text_offset_x", 0.0) * img_size))
+                oy = int(round(cfg.get("text_offset_y", 0.0) * img_size))
                 draw.text(
                     (cx - tw // 2 + ox, cy + int(radius * 0.15) + oy),
                     label,
@@ -749,8 +749,8 @@ def render_value_indicator(
                 font=gauge_font,
             )[2]
 
-            ox = int(round(cfg.get("value_offset_x", 0.0) * img_size))
-            oy = int(round(cfg.get("value_offset_y", 0.0) * img_size))
+            ox = int(round(cfg.get("text_offset_x", 0.0) * img_size))
+            oy = int(round(cfg.get("text_offset_y", 0.0) * img_size))
             draw.text(
                 (cx - tw // 2 + ox, cy + int(radius * 0.15) + oy),
                 txt_main,
@@ -1467,8 +1467,8 @@ def compose_overlay(
                 bbox = draw.textbbox((0, 0), text, font=font)
                 text_w = bbox[2] - bbox[0]
                 text_h = bbox[3] - bbox[1]
-                ox = int(round(cfg.get("value_offset_x", 0.0) * canvas_w))
-                oy = int(round(cfg.get("value_offset_y", 0.0) * canvas_h))
+                ox = int(round(cfg.get("text_offset_x", 0.0) * canvas_w))
+                oy = int(round(cfg.get("text_offset_y", 0.0) * canvas_h))
                 if rotation == 90:
                     text_x = int(rx + res.height + 8 + ox)
                     text_y = int(ry + res.width / 2 - text_h / 2 + oy)
