@@ -1,4 +1,13 @@
-video/*.mp4
+# Wideo (duże pliki binarne)
+*.mp4
+*.MP4
+*.mov
+*.MOV
+*.lrv
+*.LRV
+video/*.json
+video/*.fit
+
 exiftool_files/
 exiftool.exe
 ffmpeg.exe

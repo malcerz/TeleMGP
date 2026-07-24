@@ -14,7 +14,7 @@ from src.gui.qt.tabs.settings_tab import SettingsTab
 
 
 APP_TITLE = "TeleMGP HUD Tuner"
-APP_VERSION = "0.7.0"
+APP_VERSION = "0.7.9"
 
 
 class MainWindow(QMainWindow):
