@@ -62,6 +62,74 @@ GPX_EXT_LABELS: dict[str, str] = {
 # ── Widget classes ──────────────────────────────────────────────────────────
 
 
+class FlowFrame(tk.Frame):
+    """Frame z przepływem — elementy układają się od lewej do prawej,
+    zawijając do nowego rzędu gdy brak miejsca w poziomie."""
+
+    def __init__(self, master: tk.Widget, **kwargs) -> None:
+        super().__init__(master, **kwargs)
+        self._rows: list[tk.Frame] = []
+        self._row_widths: list[int] = []
+        self._total_width = 0
+        self._start_new_row()
+        self.bind("<Configure>", self._on_resize, add="+")
+
+    def _start_new_row(self) -> None:
+        row = tk.Frame(self)
+        row.pack(fill=tk.X, anchor="w")
+        self._rows.append(row)
+        self._row_widths.append(0)
+
+    def add_widget(self, widget: tk.Widget, padx: int = 2, pady: int = 1) -> None:
+        """Dodaje widget do przepływu — automatycznie zawija."""
+        if not self._rows:
+            self._start_new_row()
+        row = self._rows[-1]
+        widget.pack(in_=row, side=tk.LEFT, padx=padx, pady=pady)
+        self._total_width += widget.winfo_reqwidth() + padx * 2
+        self._row_widths[-1] += widget.winfo_reqwidth() + padx * 2
+        self._reflow()
+
+    def _reflow(self) -> None:
+        """Przepakowuje elementy — zawija do nowego rzędu gdy brak miejsca."""
+        avail = self.winfo_width()
+        if avail < 20:
+            return
+        # Zbierz wszystkie widgety
+        all_widgets: list[tk.Widget] = []
+        for row in self._rows:
+            for child in list(row.winfo_children()):
+                all_widgets.append(child)
+            row.destroy()
+        self._rows.clear()
+        self._row_widths.clear()
+        self._total_width = 0
+
+        if not all_widgets:
+            return
+
+        self._start_new_row()
+        for w in all_widgets:
+            w.pack_forget()
+            rw = w.winfo_reqwidth() + 4  # 2*2 padx
+            if self._row_widths[-1] + rw > avail and self._row_widths[-1] > 0:
+                self._start_new_row()
+            w.pack(in_=self._rows[-1], side=tk.LEFT, padx=2, pady=1)
+            self._row_widths[-1] += rw
+
+    def _on_resize(self, event: tk.Event | None = None) -> None:
+        self._reflow()
+
+    def clear(self) -> None:
+        """Usuwa wszystkie widgety."""
+        for row in self._rows:
+            row.destroy()
+        self._rows.clear()
+        self._row_widths.clear()
+        self._total_width = 0
+        self._start_new_row()
+
+
 class ScrollableFrame(tk.Frame):
     """A frame with a built-in vertical scrollbar.
 

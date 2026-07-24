@@ -344,10 +344,10 @@ def render_time_block(
     """Render the date/time block indicator.
 
     Returns:
-        (overlay_img, px_x, px_y) or (None, 0, 0) if disabled.
+        (overlay_img, px_x, px_y) or (None, 0, 0) if disabled or missing.
     """
-    cfg = layout["indicators"]["time_block"]
-    if not cfg.get("enabled", True):
+    cfg = layout.get("indicators", {}).get("time_block")
+    if cfg is None or not cfg.get("enabled", True):
         return None, 0, 0
 
     min_dim = min(canvas_w, canvas_h)
@@ -671,22 +671,20 @@ def render_value_indicator(
             start_deg + (end_deg - start_deg) * frac
         )
 
-        # Dłuższa wskazówka
-        needle_r_out = radius + max(
-            4 * ss,
-            int(radius * 0.10)
+        # Wskazówka
+        needle_len_rel = cfg.get("needle_length", 1.1)
+        needle_r_out = max(2 * ss, int(radius * needle_len_rel))
+        needle_r_in = max(1, int(radius * 0.05))
+        needle_width_px = max(
+            2 * ss,
+            int(cfg.get("needle_width", 4) * 1.5 * ss)
         )
 
-        # Początek bliżej środka
-        needle_r_in = radius * 0.05
-        needle_width = max(2 * ss, int(thickness * 0.18 * ss))
-
-
-        # Cieńsza
-        needle_width = max(
-            3 * ss,
-            int(thickness * 0.25 * ss)
-        )
+        needle_color_hex = cfg.get("needle_color", "#DC3232")
+        needle_rgb = parse_hex_color(needle_color_hex)
+        if needle_rgb is None:
+            needle_rgb = (220, 50, 50)
+        needle_fill = (needle_rgb[0], needle_rgb[1], needle_rgb[2], 255)
 
         px = -math.sin(ang)
         py = math.cos(ang)
@@ -700,16 +698,16 @@ def render_value_indicator(
         draw.polygon(
             [
                 (
-                    base_x + px * needle_width / 2,
-                    base_y + py * needle_width / 2,
+                    base_x + px * needle_width_px / 2,
+                    base_y + py * needle_width_px / 2,
                 ),
                 (
-                    base_x - px * needle_width / 2,
-                    base_y - py * needle_width / 2,
+                    base_x - px * needle_width_px / 2,
+                    base_y - py * needle_width_px / 2,
                 ),
                 (tip_x, tip_y),
             ],
-            fill=(220, 50, 50, 255),
+            fill=needle_fill,
         )
 
         # Oś wskazówki
@@ -717,6 +715,8 @@ def render_value_indicator(
         # ---------------------------------------------------------
         # TEKST ŚRODKOWY
         # ---------------------------------------------------------
+
+        show_value = cfg.get("show_value", True)
 
         if key == "speed_visual":
             if label:
@@ -726,15 +726,17 @@ def render_value_indicator(
                     font=gauge_font,
                 )[2]
 
+                ox = int(round(cfg.get("value_offset_x", 0.0) * img_size))
+                oy = int(round(cfg.get("value_offset_y", 0.0) * img_size))
                 draw.text(
-                    (cx - tw // 2, cy + int(radius // 2)),
+                    (cx - tw // 2 + ox, cy + int(radius * 0.15) + oy),
                     label,
                     font=gauge_font,
                     fill=(255, 255, 255, 255),
                     stroke_width=gauge_outline,
                     stroke_fill=(0, 0, 0, 255),
                 )
-        else:
+        elif show_value:
             txt_main = f"{value:.1f}"
 
             tw = draw.textbbox(
@@ -743,8 +745,10 @@ def render_value_indicator(
                 font=gauge_font,
             )[2]
 
+            ox = int(round(cfg.get("value_offset_x", 0.0) * img_size))
+            oy = int(round(cfg.get("value_offset_y", 0.0) * img_size))
             draw.text(
-                (cx - tw // 2, cy + int(radius // 2)),
+                (cx - tw // 2 + ox, cy + int(radius * 0.15) + oy),
                 txt_main,
                 font=gauge_font,
                 fill=(255, 255, 255, 255),
@@ -1107,14 +1111,39 @@ def render_value_indicator(
 
     elif form == "map":
         if gps_track and len(gps_track) >= 2:
+            from src.moving_map import MovingMapRenderer
+
+            # Cache renderer per-track (track + zoom + style = unique key)
+            track_id = id(gps_track)
+            zoom = int(cfg.get("zoom", 16))
+            map_style = cfg.get("map_style", "light_all")
+            cache_key = (track_id, zoom, map_style)
+            if not hasattr(render_value_indicator, "_map_renderers"):
+                render_value_indicator._map_renderers = {}  # type: ignore[attr-defined]
+            _cache = render_value_indicator._map_renderers  # type: ignore[attr-defined]
+            if cache_key not in _cache:
+                _cache[cache_key] = MovingMapRenderer(
+                    gps_track, zoom=zoom, style=map_style,
+                    marker_color=_parse_marker_color(cfg.get("marker_color", "#FFFFFF")),
+                    marker_radius=int(cfg.get("marker_size", 7)),
+                )
+            renderer = _cache[cache_key]
+
+            map_w = size_px
+            map_h = max(40, int(map_w * 0.65))
+            dur = (gps_track[-1][0].timestamp() - gps_track[0][0].timestamp()) if gps_track else 1.0
+            ts = (current_position if current_position is not None else 0.0) * dur
+            map_img = renderer.render(ts, map_w, map_h)
+            return map_img, s(cfg["x"], canvas_w), s(cfg["y"], canvas_h), None
+
+    elif form == "static_map":
+        if gps_track and len(gps_track) >= 2:
             from src.map_renderer import render_map_overlay
 
-            ci = None
+            ci = 0
             if current_position is not None:
                 ci = int(round(current_position * (len(gps_track) - 1)))
                 ci = max(0, min(len(gps_track) - 1, ci))
-            else:
-                ci = 0
 
             map_w = size_px
             map_h = max(40, int(map_w * 0.65))
@@ -1126,21 +1155,22 @@ def render_value_indicator(
                 marker_color=_parse_marker_color(cfg.get("marker_color", "#FFFFFF")),
             )
             return map_img, s(cfg["x"], canvas_w), s(cfg["y"], canvas_h), None
+
+    # Wspólny placeholder dla mapy (brak GPS lub za mało punktów)
+    if form in ("map", "static_map"):
+        z = int(cfg.get("zoom", 16))
+        ph_w = size_px
+        ph_h = max(60, int(ph_w * 0.65))
+        ph = Image.new("RGBA", (ph_w, ph_h), (20, 20, 30, 220))
+        draw = ImageDraw.Draw(ph)
+        if not gps_track:
+            msg = "Brak danych GPS w wideo"
         else:
-            # Placeholder with diagnostic info
-            z = int(cfg.get("zoom", 16))
-            ph_w = size_px
-            ph_h = max(60, int(ph_w * 0.65))
-            ph = Image.new("RGBA", (ph_w, ph_h), (20, 20, 30, 220))
-            draw = ImageDraw.Draw(ph)
-            if not gps_track:
-                msg = "Brak danych GPS w wideo"
-            else:
-                msg = f"GPS: {len(gps_track)} pkt (za malo)"
-            draw.text((8, 8), msg, font=font, fill=(200, 200, 200, 255),
-                      stroke_width=outline, stroke_fill=(0, 0, 0, 255))
-            draw.text((8, 24 + fs), f"Zoom: {z}", font=font, fill=(160, 160, 160, 255))
-            return ph, s(cfg["x"], canvas_w), s(cfg["y"], canvas_h), None
+            msg = f"GPS: {len(gps_track)} pkt (za malo)"
+        draw.text((8, 8), msg, font=font, fill=(200, 200, 200, 255),
+                  stroke_width=outline, stroke_fill=(0, 0, 0, 255))
+        draw.text((8, 24 + fs), f"Zoom: {z}", font=font, fill=(160, 160, 160, 255))
+        return ph, s(cfg["x"], canvas_w), s(cfg["y"], canvas_h), None
 
     return None, 0, 0, None
 
@@ -1203,24 +1233,25 @@ def compose_overlay(
         _bboxes = {}
 
     # Time block
-    tb, tbx, tby = render_time_block(canvas_w, canvas_h, layout, font_path, date_text, time_text)
-    if tb:
-        tb_rotation = layout["indicators"]["time_block"].get("rotation", 0)
-        rotated_paste(img, tb, tbx + tb.width // 2, tby + tb.height // 2, tb_rotation)
-        if tb_rotation == 90:
-            _bboxes["time_block"] = (
-                int(tbx - tb.height // 2),
-                int(tby - tb.width // 2),
-                tb.height,
-                tb.width,
-            )
-        else:
-            _bboxes["time_block"] = (
-                int(tbx - tb.width // 2),
-                int(tby - tb.height // 2),
-                tb.width,
-                tb.height,
-            )
+    if "time_block" in layout.get("indicators", {}):
+        tb, tbx, tby = render_time_block(canvas_w, canvas_h, layout, font_path, date_text, time_text)
+        if tb:
+            tb_rotation = layout["indicators"]["time_block"].get("rotation", 0)
+            rotated_paste(img, tb, tbx + tb.width // 2, tby + tb.height // 2, tb_rotation)
+            if tb_rotation == 90:
+                _bboxes["time_block"] = (
+                    int(tbx - tb.height // 2),
+                    int(tby - tb.width // 2),
+                    tb.height,
+                    tb.width,
+                )
+            else:
+                _bboxes["time_block"] = (
+                    int(tbx - tb.width // 2),
+                    int(tby - tb.height // 2),
+                    tb.width,
+                    tb.height,
+                )
 
     if indicator_values is None:
         indicator_values = {}
@@ -1245,9 +1276,9 @@ def compose_overlay(
     ]
 
     for key, default_value, unit, default_label in indicator_defs:
-        # Skip disabled indicators early
+        # Skip missing or disabled indicators early
         ind_cfg_orig = layout["indicators"].get(key)
-        if ind_cfg_orig and not ind_cfg_orig.get("enabled", True):
+        if ind_cfg_orig is None or (not ind_cfg_orig.get("enabled", True)):
             continue
         if key in indicator_values:
             raw = indicator_values[key]
@@ -1446,6 +1477,8 @@ def compose_overlay(
                         )
 
     # ── Extra indicators (dynamically discovered, e.g. FIT fields) ──
+    rendered_keys = {k for k, _, _, _ in indicator_defs}
+    rendered_keys.add("time_block")  # already rendered above, skip fallback
     if extra_indicators:
         for key, (value, unit, label) in extra_indicators.items():
             if key not in layout["indicators"]:
@@ -1473,6 +1506,39 @@ def compose_overlay(
                         rx = rx + res.width // 2
                 rotated_paste(img, res, rx, ry, rotation)
                 _bboxes[key] = (int(rx - res.width // 2), int(ry - res.height // 2), res.width, res.height)
+            rendered_keys.add(key)
+
+    # ── FALLBACK: wszystkie pozostałe wskaźniki z layoutu ──────────────
+    for key in list(layout.get("indicators", {}).keys()):
+        if key in rendered_keys:
+            continue
+        current_cfg = layout["indicators"][key].copy()
+        if not current_cfg.get("enabled", True):
+            continue
+        val = 0.0
+        unit = current_cfg.get("unit", "")
+        label = current_cfg.get("label", key)
+        if extra_indicators and key in extra_indicators:
+            val, unit, label = extra_indicators[key]
+        fv = f"{val:.1f} {unit}" if unit else f"{val:.1f}"
+        chart_vals = chart_data.get(key) if chart_data else None
+        res, rx, ry, _extra = render_value_indicator(
+            canvas_w, canvas_h, layout, font_path,
+            key, val, unit, label,
+            cfg_override=current_cfg,
+            formatted_val=fv,
+            history_data=chart_vals,
+            current_position=current_position,
+        )
+        if res:
+            rotation = current_cfg.get("rotation", 0)
+            if current_cfg.get("form", "text") == "text":
+                if rotation == 90:
+                    rx = rx + res.height // 2
+                else:
+                    rx = rx + res.width // 2
+            rotated_paste(img, res, rx, ry, rotation)
+            _bboxes[key] = (int(rx - res.width // 2), int(ry - res.height // 2), res.width, res.height)
 
     # Custom texts – use resolution-scaled outline
     ct_outline = max(0, int(round(
@@ -1540,7 +1606,13 @@ def build_chart_data(
         elif "temp" in ind_key and "atemp" not in ind_key:
             vals = [v for _, v in resolve_samples_fn("temperature")]
         else:
-            vals = []
+            # Dla kluczy typu fit_{field_name}_text — wyciągnij field_name
+            # i rozwiąż przez resolve_samples_fn
+            if ind_key.startswith("fit_") and ind_key.endswith("_text"):
+                field_name = ind_key[4:-5]
+                vals = [v for _, v in resolve_samples_fn(field_name)]
+            else:
+                vals = []
         if vals and len(vals) >= 2:
             chart_data[ind_key] = vals
     return chart_data

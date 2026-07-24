@@ -5,3 +5,6 @@ map_renderer
 overlay_renderer
 telemetry_extract
 telemetry_gpmf
+test_compare
+test_render
+video_helpers

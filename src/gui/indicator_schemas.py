@@ -90,6 +90,8 @@ _FORM_FIELDS: dict[str, set[str]] = {
                     "min_val", "max_val", "show_value", "show_min", "show_max",
                     "show_label", "decimals", "direction", "grow_height",
                     "inactive_alpha", "inactive_color", "source"},
+    "map":        {"font_size", "size", "zoom", "map_style", "marker_size", "marker_color"},
+    "static_map": {"font_size", "size", "zoom", "map_style", "marker_size", "marker_color"},
 }
 
 _ALL_FORM_FIELDS: set[str] = set().union(*_FORM_FIELDS.values()).union({"form"})

@@ -1,0 +1,23 @@
+{
+  "version": 5,
+  "global": {
+    "text_outline": 3
+  },
+  "custom_texts": [],
+  "indicators": {
+    "time_block": {
+      "enabled": true,
+      "label": "Czas",
+      "x": 0.018,
+      "y": 0.03,
+      "rotation": 0,
+      "font_label": 0.0125,
+      "font_date": 0.02,
+      "font_time": 0.02
+    }
+  },
+  "smoothing": {
+    "method": "moving_average",
+    "strength": 3
+  }
+}

@@ -24,15 +24,32 @@ class CenterPanelView:
         app.preview_label.bind('<B1-Motion>', app.preview_ctrl.on_drag_motion)
         app.preview_label.bind('<ButtonRelease-1>', app.preview_ctrl.on_mouse_up)
 
-        # ── Timeline Seekbar Frame ──
+        # ── Timeline Seekbar + Play/Stop (ta sama linia) ──
         seek_frame = tk.Frame(center_pw)
         center_pw.add(seek_frame, minsize=90)
-        app.seek_slider = tk.Scale(seek_frame, variable=app.seek_var, from_=0, to=100,
-                                   orient=tk.HORIZONTAL, showvalue=False, label="Czas wideo",
+
+        ctrl_seek_row = tk.Frame(seek_frame)
+        ctrl_seek_row.pack(fill=tk.X)
+
+        play_btn = tk.Button(
+            ctrl_seek_row, text='\u25B6', width=2,
+            command=app.playback_start, relief=tk.FLAT,
+            font=('Segoe UI', 11),
+        )
+        play_btn.pack(side=tk.LEFT, padx=(0, 2))
+        stop_btn = tk.Button(
+            ctrl_seek_row, text='\u25A0', width=2,
+            command=app.playback_stop, relief=tk.FLAT,
+            font=('Segoe UI', 11),
+        )
+        stop_btn.pack(side=tk.LEFT, padx=(0, 4))
+
+        app.seek_slider = tk.Scale(ctrl_seek_row, variable=app.seek_var, from_=0, to=100,
+                                   orient=tk.HORIZONTAL, showvalue=False, label="",
                                    resolution=1, tickinterval=0,
                                    command=lambda _: (app.schedule_refresh(100), app.update_seek_time_label()),
                                    takefocus=1)
-        app.seek_slider.pack(fill=tk.X)
+        app.seek_slider.pack(fill=tk.X, expand=True, side=tk.LEFT)
         app.seek_slider.bind('<Button-1>', lambda e: app.seek_slider.focus_set())
         for key in ('<Left>', '<Right>', '<Up>', '<Down>'):
             app.seek_slider.bind(key, app.on_seek_arrow)

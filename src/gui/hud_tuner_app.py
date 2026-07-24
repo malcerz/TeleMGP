@@ -130,7 +130,7 @@ except ImportError:
         raise RuntimeError("GPMF module not available")
 
 
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.9.0"
 RESOLUTION_OPTIONS = ['source', '8k', '5.3k', '4k', '1080p', '720p', '480p']
 ENCODER_OPTIONS = ['nv', 'intel', 'cpu']
 GPS_OPTIONS = ['3d', '2d']
@@ -303,6 +303,8 @@ class HudTunerApp:
 
         self.video_duration_s = 0.0
         self._refresh_after_id = None
+        self._playback_after_id = None
+        self._playing = False
         self.render_cancel_event = threading.Event()
         self._active_process = None
         self._render_executor = None
@@ -431,6 +433,40 @@ class HudTunerApp:
             except Exception:
                 pass
         self._refresh_after_id = self.root.after(delay, self.refresh)
+
+    # ── Playback controls ──────────────────────────────────────────────
+
+    def playback_start(self):
+        """Start preview playback (auto-advance seek)."""
+        if self.video_path is None or self.video_duration_s <= 0:
+            return
+        self._playing = True
+        self.playback_step()
+
+    def playback_stop(self):
+        """Stop preview playback."""
+        self._playing = False
+        if self._playback_after_id is not None:
+            try:
+                self.root.after_cancel(self._playback_after_id)
+            except Exception:
+                pass
+            self._playback_after_id = None
+
+    def playback_step(self):
+        """Advance one frame during playback."""
+        if not self._playing:
+            return
+        current = self.seek_var.get()
+        step = 1.0 / max(self.fps, 1.0)
+        nxt = current + step
+        if nxt >= self.video_duration_s:
+            self.playback_stop()
+            return
+        self.seek_var.set(nxt)
+        self.schedule_refresh(0)
+        interval = max(16, int(step * 1000))
+        self._playback_after_id = self.root.after(interval, self.playback_step)
 
     def on_preview_resize(self, event=None):
         self.schedule_refresh(60)

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """TeleM – GoPro Telemetry Overlay Application (launcher).
 
-Re-exports HudTunerApp from the refactored src.gui.hud_tuner_app module.
+Uruchamia nowy interfejs PySide6 z czterema zakładkami.
+Stary interfejs Tkinter dostępny przez: python -c "from src.gui.hud_tuner_app import main; main()"
 """
 import sys
 from pathlib import Path
@@ -9,9 +10,6 @@ from pathlib import Path
 _root = Path(__file__).resolve().parent
 if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
-
-from src.gui.hud_tuner_app import HudTunerApp, default_layout  # noqa: E402, F401
-from src.overlay_renderer import render_preview  # noqa: E402, F401
 
 # Re-export symbols for backward compatibility with tests
 from src.telemetry_extract import (  # noqa: E402, F401
@@ -30,8 +28,5 @@ from src.telemetry_extract import (  # noqa: E402, F401
 )
 
 if __name__ == "__main__":
-    import tkinter as tk
-
-    root = tk.Tk()
-    app = HudTunerApp(root)
-    root.mainloop()
+    from src.gui.qt.application import main
+    main()

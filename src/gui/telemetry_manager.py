@@ -613,7 +613,7 @@ class TelemetryDataManager:
                 min_val = min(vals) if vals else 0
 
                 indicators[key] = {
-                    "enabled": True,
+                    "enabled": False,
                     "label": field_name.replace("_", " ").title(),
                     "x": 0.5, "y": 0.08, "rotation": 0,
                     "form": "text",

@@ -107,17 +107,7 @@ def detect_best_encoder() -> str:
     # Force detection if not yet done
     hwaccel = detect_gpu_decoder()
 
-    try:
-        r = subprocess.run(
-            ["nvidia-smi"], capture_output=True, timeout=5,
-            **({} if os.name != "nt" else {"startupinfo": _nt_startupinfo()}),
-        )
-        if r.returncode == 0:
-            _GPU_DECODER_CACHE = "cuda"
-            return "nv"
-    except Exception:
-        pass
-
+    # Primary source of truth: check which encoders FFmpeg actually supports
     try:
         r = subprocess.run(
             ["ffmpeg", "-hide_banner", "-encoders"],
@@ -135,7 +125,20 @@ def detect_best_encoder() -> str:
     except Exception:
         pass
 
-    # Fallback: check hwaccels as secondary signal
+    # Fallback: nvidia-smi detection (less reliable — nvidia-smi may exist
+    # without full NVENC driver support)
+    try:
+        r = subprocess.run(
+            ["nvidia-smi"], capture_output=True, timeout=5,
+            **({} if os.name != "nt" else {"startupinfo": _nt_startupinfo()}),
+        )
+        if r.returncode == 0:
+            _GPU_DECODER_CACHE = "cuda"
+            return "nv"
+    except Exception:
+        pass
+
+    # Last resort: check hwaccels as secondary signal
     if hwaccel in ("cuda", "d3d11va"):
         return "nv"
     if hwaccel == "qsv":
@@ -431,13 +434,26 @@ def render_overlay_job(job: tuple) -> int:
     current_position = index / max(1, total_frames - 1) if total_frames > 1 else 0.0
     chart_data = WORKER_CACHE.get("_precomputed_chart_data", {})
 
-    # Build extra indicators from FIT fields
+    # Build extra indicators – MUST match _render_preview in controller.py
+    _HARDCODED_KEYS = {
+        "speed_visual", "speed_text", "dist_visual", "dist_text",
+        "alt_visual", "alt_text", "iso_text", "exposure_text",
+        "temp_text", "power_text", "atemp_text", "hr_text",
+        "cad_text", "battery_text", "track_map", "time_block",
+    }
     extra_indicators: dict[str, tuple[float, str, str]] = {}
+    # 1) FIT fields – resolve real values from telemetry
     for ind_key, ind_cfg in layout.get("indicators", {}).items():
         if ind_key.startswith("fit_") and ind_key.endswith("_text"):
             field_name = ind_key[4:-5]
             fit_val = _resolve_cache_value(field_name, current_dt_utc) or 0.0
             extra_indicators[ind_key] = (fit_val, ind_cfg.get("unit", ""), ind_cfg.get("label", field_name))
+    # 2) All remaining dynamic indicators (non-hardcoded, not already captured)
+    for ind_key in list(layout.get("indicators", {}).keys()):
+        if ind_key in _HARDCODED_KEYS or ind_key in extra_indicators:
+            continue
+        ind_cfg = layout["indicators"][ind_key]
+        extra_indicators[ind_key] = (0.0, ind_cfg.get("unit", ""), ind_cfg.get("label", ind_key))
 
     img = compose_overlay(
         video_width, video_height, layout, font_path, date_text, time_text,
@@ -822,13 +838,26 @@ def render_overlay_frame(
     current_position = index / max(1, total_frames - 1) if total_frames > 1 else 0.0
     chart_data = WORKER_CACHE.get("_precomputed_chart_data", {})
 
-    # Build extra indicators from FIT fields
+    # Build extra indicators – MUST match _render_preview in controller.py
+    _HARDCODED_KEYS = {
+        "speed_visual", "speed_text", "dist_visual", "dist_text",
+        "alt_visual", "alt_text", "iso_text", "exposure_text",
+        "temp_text", "power_text", "atemp_text", "hr_text",
+        "cad_text", "battery_text", "track_map", "time_block",
+    }
     extra_indicators: dict[str, tuple[float, str, str]] = {}
+    # 1) FIT fields – resolve real values from telemetry
     for ind_key, ind_cfg in layout.get("indicators", {}).items():
         if ind_key.startswith("fit_") and ind_key.endswith("_text"):
             field_name = ind_key[4:-5]
             fit_val = _resolve_cache_value(field_name, current_dt_utc) or 0.0
             extra_indicators[ind_key] = (fit_val, ind_cfg.get("unit", ""), ind_cfg.get("label", field_name))
+    # 2) All remaining dynamic indicators (non-hardcoded, not already captured)
+    for ind_key in list(layout.get("indicators", {}).keys()):
+        if ind_key in _HARDCODED_KEYS or ind_key in extra_indicators:
+            continue
+        ind_cfg = layout["indicators"][ind_key]
+        extra_indicators[ind_key] = (0.0, ind_cfg.get("unit", ""), ind_cfg.get("label", ind_key))
 
     return compose_overlay(
         video_width, video_height, layout, font_path, date_text, time_text,
@@ -940,6 +969,8 @@ def stream_overlay_to_ffmpeg(
     input_args: list[str] = []
     if hwaccel:
         input_args.extend(["-hwaccel", hwaccel])
+        if hwaccel == "qsv":
+            input_args.extend(["-hwaccel_output_format", "nv12"])
     if isinstance(input_files, list) and len(input_files) > 1:
         concat_txt = Path(output_file).parent / "render_concat_list.txt"
         with open(concat_txt, "w", encoding="utf-8") as f:
@@ -1222,6 +1253,8 @@ def apply_overlay_video(
     input_args: list[str] = []
     if hwaccel:
         input_args.extend(["-hwaccel", hwaccel])
+        if hwaccel == "qsv":
+            input_args.extend(["-hwaccel_output_format", "nv12"])
     if isinstance(input_files, list) and len(input_files) > 1:
         concat_txt = Path(output_file).parent / "render_concat_list.txt"
         with open(concat_txt, "w", encoding="utf-8") as f:
